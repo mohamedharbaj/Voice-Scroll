@@ -245,12 +245,24 @@ class VoiceScrollForegroundService : Service(), VoiceCommandRecognizer.Callback 
         // Can be routed to UI visualizer
     }
 
+    /**
+     * "وقف / حبس / stop" عاديين = إيقاف الفيديو غير (PAUSE).
+     * التطبيق كيتوقف فقط بعبارة صريحة فيها "الاستماع / listening / écouter / التطبيق / app".
+     */
+    private fun isExplicitStopListening(rawText: String): Boolean {
+        val t = com.voicescroll.app.engine.ArabicNormalizer.normalize(rawText)
+        return listOf("استماع", "listening", "ecout", "التطبيق", "the app", "stop app").any { t.contains(it) }
+    }
+
     override fun onCommandMatched(result: CommandMatchResult) {
         Log.i(TAG, "onCommandMatched received: ${result.command} from '${result.rawText}'")
 
-        // STOP كيتنفذ غير بعبارة صريحة بحال "stop listening" / "وقف الاستماع".
-        // "وقف / حبس / stop" عاديين = PAUSE (إيقاف الفيديو غير).
-        if (result.command == CommandType.STOP) {
+        var effective = result.command
+        if (effective == CommandType.STOP && !isExplicitStopListening(result.rawText)) {
+            effective = CommandType.PAUSE
+        }
+
+        if (effective == CommandType.STOP) {
             stopServiceAndControl()
             return
         }
@@ -261,25 +273,25 @@ class VoiceScrollForegroundService : Service(), VoiceCommandRecognizer.Callback 
             broadcastStatus(
                 isListening = true,
                 statusText = getString(R.string.msg_accessibility_required),
-                command = result.command.name,
+                command = effective.name,
                 phrase = result.rawText
             )
             return
         }
 
-        val executed = accessibility.performAction(result.command)
-        Log.i(TAG, "Accessibility performAction result for ${result.command}: $executed")
+        val executed = accessibility.performAction(effective)
+        Log.i(TAG, "Accessibility performAction result for $effective: $executed")
 
         val statusText = if (executed) {
-            getString(R.string.status_gesture_dispatched, result.command.displayNameAr)
+            getString(R.string.status_gesture_dispatched, effective.displayNameAr)
         } else {
-            getString(R.string.status_command_recognized, result.command.displayNameAr)
+            getString(R.string.status_command_recognized, effective.displayNameAr)
         }
 
         broadcastStatus(
             isListening = true,
             statusText = statusText,
-            command = result.command.name,
+            command = effective.name,
             phrase = result.rawText
         )
     }
