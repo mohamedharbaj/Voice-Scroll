@@ -32,8 +32,8 @@ class PreferencesManager(context: Context) {
         /** All languages: the recognizer rotates between Darija/Arabic, English and French. */
         const val LANG_AUTO = "auto"
 
-        const val DEFAULT_SWIPE_DURATION_MS = 280L
-        const val DEFAULT_COOLDOWN_MS = 900L
+        const val DEFAULT_SWIPE_DURATION_MS = 200L
+        const val DEFAULT_COOLDOWN_MS = 450L
     }
 
     var isVoiceControlActive: Boolean
