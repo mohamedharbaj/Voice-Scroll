@@ -152,7 +152,7 @@ class MainActivity : Activity() {
             "العربية الفصحى (ar-SA) – لغة الأوامر" to PreferencesManager.LANG_AR_STANDARD,
             "Français (fr-FR)" to PreferencesManager.LANG_FRENCH,
             "English (en-US)" to PreferencesManager.LANG_ENGLISH,
-            "تلقائي (Auto)" to PreferencesManager.LANG_AUTO
+            "كل اللغات (دارجة + English + Français)" to PreferencesManager.LANG_AUTO
         )
 
         val adapter = object : ArrayAdapter<String>(this, R.layout.item_spinner_language, languages.map { it.first }) {
