@@ -14,6 +14,14 @@
         android:name="android.hardware.touchscreen"
         android:required="false" />
 
+    <!-- Android 11+ (package visibility): بلا هاد الجزء SpeechRecognizer.isRecognitionAvailable كيرجع false
+         وما كيتلقى حتى خدمة تعرف على الصوت، وبالتالي التطبيق ما كيستجيب للأوامر -->
+    <queries>
+        <intent>
+            <action android:name="android.speech.RecognitionService" />
+        </intent>
+    </queries>
+
     <application
         android:name=".VoiceScrollApp"
         android:allowBackup="true"
