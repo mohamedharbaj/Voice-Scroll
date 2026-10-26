@@ -1,5 +1,6 @@
 package com.voicescroll.app.service
 
+import android.Manifest
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -7,6 +8,7 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
@@ -21,7 +23,11 @@ import com.voicescroll.app.ui.MainActivity
 /**
  * Foreground Service that keeps speech recognition alive while user interacts with
  * external video apps (TikTok, YouTube, Instagram, Facebook).
- * Uses Android 14+ microphone foreground service type.
+ *
+ * النوتيفيكاسيو (بحال VPN):
+ *  - التطبيق خدام  -> نوتيفيكاسيو فيها زر "إيقاف".
+ *  - التطبيق موقوف -> نوتيفيكاسيو فيها زر "تشغيل" (كتبقى باش تقدر تشغلو بلا ما تفتح التطبيق).
+ *    إلا كانت صلاحية الوصول/الميكروفون ناقصة، الزر كيفتح التطبيق باش تعطيها.
  */
 class VoiceScrollForegroundService : Service(), VoiceCommandRecognizer.Callback {
 
@@ -29,6 +35,7 @@ class VoiceScrollForegroundService : Service(), VoiceCommandRecognizer.Callback 
         private const val TAG = "VoiceForegroundService"
         const val CHANNEL_ID = "voice_scroll_service_channel"
         const val NOTIFICATION_ID = 1001
+        const val NOTIFICATION_ID_STOPPED = 1002
 
         const val ACTION_START = "com.voicescroll.app.ACTION_START"
         const val ACTION_STOP = "com.voicescroll.app.ACTION_STOP"
@@ -46,6 +53,114 @@ class VoiceScrollForegroundService : Service(), VoiceCommandRecognizer.Callback 
         fun updateRunningState(running: Boolean) {
             isRunning = running
         }
+
+        // ---------------- helpers مشتركة (كيستعملهم حتى MainActivity) ----------------
+
+        private fun ensureChannel(context: Context) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val channel = NotificationChannel(
+                    CHANNEL_ID,
+                    context.getString(R.string.notification_channel_name),
+                    NotificationManager.IMPORTANCE_LOW
+                ).apply {
+                    description = context.getString(R.string.notification_channel_desc)
+                    setShowBadge(false)
+                }
+                val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                manager.createNotificationChannel(channel)
+            }
+        }
+
+        private fun newBuilder(context: Context): Notification.Builder {
+            return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                Notification.Builder(context, CHANNEL_ID)
+            } else {
+                @Suppress("DEPRECATION")
+                Notification.Builder(context)
+            }
+        }
+
+        private fun hasMicPermission(context: Context): Boolean {
+            return Build.VERSION.SDK_INT < Build.VERSION_CODES.M ||
+                context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+        }
+
+        private fun openAppIntent(context: Context, autoStart: Boolean): PendingIntent {
+            val intent = Intent(context, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                if (autoStart) putExtra(MainActivity.EXTRA_AUTO_START, true)
+            }
+            return PendingIntent.getActivity(
+                context,
+                if (autoStart) 3 else 0,
+                intent,
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+            )
+        }
+
+        /** نوتيفيكاسيو "التطبيق موقوف" فيها زر تشغيل. */
+        private fun buildStoppedNotification(context: Context): Notification {
+            val ready = hasMicPermission(context) && VoiceScrollAccessibilityService.isServiceEnabled(context)
+
+            val startPendingIntent: PendingIntent = if (ready) {
+                val startIntent = Intent(context, VoiceScrollForegroundService::class.java).apply {
+                    action = ACTION_START
+                }
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    PendingIntent.getForegroundService(
+                        context, 2, startIntent,
+                        PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+                    )
+                } else {
+                    PendingIntent.getService(
+                        context, 2, startIntent,
+                        PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+                    )
+                }
+            } else {
+                // الصلاحيات ناقصة: نفتحو التطبيق باش المستخدم يعطيها ويتشغل أوتوماتيكيا
+                openAppIntent(context, autoStart = true)
+            }
+
+            val text = if (ready) {
+                context.getString(R.string.notification_stopped_text)
+            } else {
+                context.getString(R.string.notification_needs_access_text)
+            }
+
+            return newBuilder(context)
+                .setContentTitle(context.getString(R.string.notification_stopped_title))
+                .setContentText(text)
+                .setSmallIcon(android.R.drawable.ic_btn_speak_now)
+                .setContentIntent(openAppIntent(context, autoStart = false))
+                .addAction(
+                    android.R.drawable.ic_media_play,
+                    context.getString(R.string.action_start),
+                    startPendingIntent
+                )
+                .setOngoing(false)
+                .setAutoCancel(false)
+                .build()
+        }
+
+        /** كتبان النوتيفيكاسيو ديال "موقوف + زر تشغيل". */
+        fun showStoppedNotification(context: Context) {
+            try {
+                ensureChannel(context)
+                val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                manager.notify(NOTIFICATION_ID_STOPPED, buildStoppedNotification(context))
+            } catch (e: Exception) {
+                Log.w(TAG, "Could not show stopped notification: ${e.message}")
+            }
+        }
+
+        fun cancelStoppedNotification(context: Context) {
+            try {
+                val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                manager.cancel(NOTIFICATION_ID_STOPPED)
+            } catch (_: Exception) {
+            }
+        }
     }
 
     private var recognizer: VoiceCommandRecognizer? = null
@@ -54,7 +169,7 @@ class VoiceScrollForegroundService : Service(), VoiceCommandRecognizer.Callback 
     override fun onCreate() {
         super.onCreate()
         prefsManager = PreferencesManager(this)
-        createNotificationChannel()
+        ensureChannel(this)
         recognizer = VoiceCommandRecognizer(this, this)
         Log.i(TAG, "VoiceScrollForegroundService created")
     }
@@ -67,12 +182,9 @@ class VoiceScrollForegroundService : Service(), VoiceCommandRecognizer.Callback 
             return START_NOT_STICKY
         }
 
-        isRunning = true
-        prefsManager.isVoiceControlActive = true
-
         val notification = buildNotification(getString(R.string.notification_running_text))
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                 startForeground(
                     NOTIFICATION_ID,
@@ -82,9 +194,19 @@ class VoiceScrollForegroundService : Service(), VoiceCommandRecognizer.Callback 
             } else {
                 startForeground(NOTIFICATION_ID, notification)
             }
-        } else {
-            startForeground(NOTIFICATION_ID, notification)
+        } catch (e: Exception) {
+            // أندرويد 14+: بلا إذن الميكروفون startForeground كيرمي SecurityException
+            Log.e(TAG, "startForeground failed: ${e.message}")
+            isRunning = false
+            prefsManager.isVoiceControlActive = false
+            showStoppedNotification(this)
+            stopSelf()
+            return START_NOT_STICKY
         }
+
+        isRunning = true
+        prefsManager.isVoiceControlActive = true
+        cancelStoppedNotification(this)
 
         recognizer?.startListening()
         broadcastStatus(isListening = true, statusText = getString(R.string.status_listening))
@@ -98,6 +220,8 @@ class VoiceScrollForegroundService : Service(), VoiceCommandRecognizer.Callback 
         recognizer?.stopListening()
         broadcastStatus(isListening = false, statusText = getString(R.string.status_stopped))
         stopForeground(STOP_FOREGROUND_REMOVE)
+        // نخليو نوتيفيكاسيو فيها زر "تشغيل" باش المستخدم يقدر يشغل التطبيق من جديد
+        showStoppedNotification(this)
         stopSelf()
     }
 
@@ -124,6 +248,8 @@ class VoiceScrollForegroundService : Service(), VoiceCommandRecognizer.Callback 
     override fun onCommandMatched(result: CommandMatchResult) {
         Log.i(TAG, "onCommandMatched received: ${result.command} from '${result.rawText}'")
 
+        // STOP كيتنفذ غير بعبارة صريحة بحال "stop listening" / "وقف الاستماع".
+        // "وقف / حبس / stop" عاديين = PAUSE (إيقاف الفيديو غير).
         if (result.command == CommandType.STOP) {
             stopServiceAndControl()
             return
@@ -180,6 +306,7 @@ class VoiceScrollForegroundService : Service(), VoiceCommandRecognizer.Callback 
         phrase: String? = null
     ) {
         val intent = Intent(ACTION_BROADCAST_STATUS).apply {
+            setPackage(packageName)
             putExtra(EXTRA_IS_SERVICE_RUNNING, isRunning)
             putExtra(EXTRA_IS_LISTENING, isListening)
             putExtra(EXTRA_STATUS_TEXT, statusText)
@@ -189,29 +316,8 @@ class VoiceScrollForegroundService : Service(), VoiceCommandRecognizer.Callback 
         sendBroadcast(intent)
     }
 
-    private fun createNotificationChannel() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
-                CHANNEL_ID,
-                getString(R.string.notification_channel_name),
-                NotificationManager.IMPORTANCE_LOW
-            ).apply {
-                description = getString(R.string.notification_channel_desc)
-                setShowBadge(false)
-            }
-            val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-            manager.createNotificationChannel(channel)
-        }
-    }
-
+    /** نوتيفيكاسيو "التطبيق خدام" فيها زر إيقاف. */
     private fun buildNotification(contentText: String): Notification {
-        val pendingIntent = PendingIntent.getActivity(
-            this,
-            0,
-            Intent(this, MainActivity::class.java),
-            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
-        )
-
         val stopIntent = Intent(this, VoiceScrollForegroundService::class.java).apply {
             action = ACTION_STOP
         }
@@ -222,20 +328,21 @@ class VoiceScrollForegroundService : Service(), VoiceCommandRecognizer.Callback 
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
 
-        val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            Notification.Builder(this, CHANNEL_ID)
-        } else {
-            @Suppress("DEPRECATION")
-            Notification.Builder(this)
-        }
-
-        return builder
+        val builder = newBuilder(this)
             .setContentTitle(getString(R.string.notification_running_title))
             .setContentText(contentText)
             .setSmallIcon(android.R.drawable.ic_btn_speak_now)
-            .setContentIntent(pendingIntent)
-            .addAction(android.R.drawable.ic_menu_close_clear_cancel, getString(R.string.btn_stop_voice_control), stopPendingIntent)
+            .setContentIntent(openAppIntent(this, autoStart = false))
+            .addAction(
+                android.R.drawable.ic_media_pause,
+                getString(R.string.action_stop),
+                stopPendingIntent
+            )
             .setOngoing(true)
-            .build()
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            builder.setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE)
+        }
+        return builder.build()
     }
 }
