@@ -3,11 +3,16 @@ package com.voicescroll.app.service
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.AccessibilityServiceInfo
 import android.accessibilityservice.GestureDescription
+import android.content.Context
 import android.content.Intent
 import android.graphics.Path
+import android.media.AudioManager
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.util.DisplayMetrics
 import android.util.Log
+import android.view.KeyEvent
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import com.voicescroll.app.data.PreferencesManager
@@ -43,6 +48,10 @@ class VoiceScrollAccessibilityService : AccessibilityService() {
 
     private lateinit var prefsManager: PreferencesManager
     private var lastGestureTimeMs: Long = 0L
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private val audioManager: AudioManager by lazy {
+        getSystemService(Context.AUDIO_SERVICE) as AudioManager
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -68,12 +77,15 @@ class VoiceScrollAccessibilityService : AccessibilityService() {
         if (instance == this) {
             instance = null
         }
+        mainHandler.removeCallbacksAndMessages(null)
         Log.i(TAG, "VoiceScrollAccessibilityService destroyed")
     }
 
     fun performAction(command: CommandType): Boolean {
         val currentTime = System.currentTimeMillis()
-        val cooldown = prefsManager.cooldownMs.coerceAtLeast(300L)
+        // فترة منع التكرار كتطبق غير على التمرير (دوز/رجع). وقف/شغل خاصهم يتنفذو فالحين.
+        val isSwipe = command == CommandType.NEXT || command == CommandType.PREVIOUS
+        val cooldown = if (isSwipe) prefsManager.cooldownMs.coerceAtLeast(300L) else 250L
         if (currentTime - lastGestureTimeMs < cooldown) {
             return false
         }
@@ -86,14 +98,10 @@ class VoiceScrollAccessibilityService : AccessibilityService() {
                 broadcastStateChange()
                 true
             }
-            CommandType.RESUME -> {
-                prefsManager.isVoiceControlActive = true
-                broadcastStateChange()
-                true
-            }
-            CommandType.PAUSE, CommandType.PLAY -> {
-                singleTapCenter()
-            }
+            // كمل / تابع / resume / شغل / play = نكملو الفيديو (التطبيق كيبقى خدام)
+            CommandType.RESUME, CommandType.PLAY -> playVideo()
+            // وقف / حبس / قف / stop / pause = نوقفو الفيديو غير (التطبيق كيبقى كيسمع)
+            CommandType.PAUSE -> pauseVideo()
             CommandType.NONE -> false
         }
 
@@ -129,6 +137,39 @@ class VoiceScrollAccessibilityService : AccessibilityService() {
             lineTo(centerX, endY)
         }
         return dispatchSwipe(path, duration)
+    }
+
+    /**
+     * كنوقفو الفيديو فقط. الأول كنرسلو مفتاح Media PAUSE (ما كيبدلش الحالة إلا كان الفيديو خدام)،
+     * وإلا الفيديو بقا كيسمع (TikTok/Instagram بلا Media Session) كنضغطو وسط الشاشة.
+     * إلا ما كان حتى صوت خدام، الفيديو موقوف من قبل -> ما كنديرو والو (باش "stop" مرتين ما يشغلوش الفيديو).
+     */
+    private fun pauseVideo(): Boolean {
+        if (!audioManager.isMusicActive) return true
+        sendMediaKey(KeyEvent.KEYCODE_MEDIA_PAUSE)
+        mainHandler.postDelayed({
+            if (audioManager.isMusicActive) singleTapCenter()
+        }, 350L)
+        return true
+    }
+
+    /** كنكملو الفيديو: إلا كان خدام من قبل ما كنديرو والو. */
+    private fun playVideo(): Boolean {
+        if (audioManager.isMusicActive) return true
+        sendMediaKey(KeyEvent.KEYCODE_MEDIA_PLAY)
+        mainHandler.postDelayed({
+            if (!audioManager.isMusicActive) singleTapCenter()
+        }, 350L)
+        return true
+    }
+
+    private fun sendMediaKey(keyCode: Int) {
+        try {
+            audioManager.dispatchMediaKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, keyCode))
+            audioManager.dispatchMediaKeyEvent(KeyEvent(KeyEvent.ACTION_UP, keyCode))
+        } catch (e: Exception) {
+            Log.w(TAG, "Media key $keyCode failed: ${e.message}")
+        }
     }
 
     private fun singleTapCenter(): Boolean {
