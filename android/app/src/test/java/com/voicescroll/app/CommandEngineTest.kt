@@ -138,4 +138,49 @@ class CommandEngineTest {
         assertEquals("ارجع", ArabicNormalizer.normalize("إِرْجَعْ"))
         assertEquals("next", ArabicNormalizer.normalize("  Next!  "))
     }
+
+    @Test
+    fun testAllLanguagesAndScripts() {
+        val cases = mapOf(
+            // Latin-script Darija (as produced by en/fr recognizers)
+            "dawz" to CommandType.NEXT,
+            "tla3" to CommandType.NEXT,
+            "hbat" to CommandType.PREVIOUS,
+            "rje3" to CommandType.PREVIOUS,
+            "wa9ef" to CommandType.STOP,
+            "7bs" to CommandType.STOP,
+            "kml" to CommandType.RESUME,
+            // English/French as written in Arabic script
+            "نكست" to CommandType.NEXT,
+            "بريفيوس" to CommandType.PREVIOUS,
+            "ستوب" to CommandType.STOP,
+            "ريزوم" to CommandType.RESUME,
+            "بوز" to CommandType.PAUSE,
+            // Accents are ignored
+            "précédent" to CommandType.PREVIOUS,
+            "vidéo suivante" to CommandType.NEXT,
+            // Filler words around the command
+            "please next" to CommandType.NEXT,
+            "عفاك دوز" to CommandType.NEXT,
+            "mets en pause" to CommandType.PAUSE,
+            "كتدوز" to CommandType.NEXT
+        )
+        for ((phrase, expected) in cases) {
+            assertEquals("Phrase '$phrase'", expected, CommandEngine.match(phrase).command)
+        }
+    }
+
+    @Test
+    fun testNoFalsePositivesInsideWords() {
+        val none = listOf("cup of coffee", "support", "nonstop music", "background")
+        for (phrase in none) {
+            assertEquals("Phrase '$phrase' must not match", CommandType.NONE, CommandEngine.match(phrase).command)
+        }
+    }
+
+    @Test
+    fun testLongSpeechIsIgnored() {
+        val longSpeech = "so yesterday I went to the market and then I saw him go up the street"
+        assertEquals(CommandType.NONE, CommandEngine.match(longSpeech).command)
+    }
 }
