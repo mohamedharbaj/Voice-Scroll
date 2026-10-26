@@ -29,8 +29,8 @@
     <string name="basic_commands_title">الأوامر الأساسية</string>
     <string name="cmd_next_label">التالي (Swipe Up): دوز، التالي، طلع، next</string>
     <string name="cmd_prev_label">السابق (Swipe Down): رجع، السابق، هبط، back</string>
-    <string name="cmd_stop_label">توقف: وقف، حبس، صافي، stop</string>
-    <string name="cmd_resume_label">متابعة: كمل، تابع، ابدأ، resume</string>
+    <string name="cmd_stop_label">إيقاف الفيديو: وقف، حبس، قف، توقف، stop (التطبيق يبقى خدام)</string>
+    <string name="cmd_resume_label">تشغيل الفيديو: كمل، تابع، شغل، resume, play</string>
 
     <string name="quick_guide_title">طريقة الاستخدام السريعة</string>
     <string name="quick_guide_step1">1. فعّل خدمة إمكانية الوصول وامنح إذن الميكروفون.</string>
@@ -78,7 +78,12 @@
     <string name="notification_channel_name">خدمة Voice Scroll الصوتية</string>
     <string name="notification_channel_desc">إشعار تشغيل خدمة الاستماع للأوامر الصوتية</string>
     <string name="notification_running_title">Voice Scroll يعمل في الخلفية</string>
-    <string name="notification_running_text">يستمع إلى أوامرك (دوز، رجع، وقف، كمل…)</string>
+    <string name="notification_running_text">يستمع إلى أوامرك (دوز، رجع، وقف الفيديو، كمل…)</string>
+    <string name="notification_stopped_title">Voice Scroll متوقف</string>
+    <string name="notification_stopped_text">اضغط «تشغيل» لبدء التحكم الصوتي</string>
+    <string name="notification_needs_access_text">اضغط «تشغيل» وفعّل صلاحية الوصول والميكروفون</string>
+    <string name="action_start">تشغيل</string>
+    <string name="action_stop">إيقاف</string>
 
     <!-- About -->
     <string name="about_app_description">Voice Scroll هو تطبيق مجاني للتحكم في التمرير داخل تطبيقات الفيديو القصيرة (TikTok, YouTube, Instagram, Facebook) باستخدام أوامر صوتية محلية سريعة ودون الحاجة لأي ذكاء اصطناعي أو اتصال بخوادم خارجية.</string>
