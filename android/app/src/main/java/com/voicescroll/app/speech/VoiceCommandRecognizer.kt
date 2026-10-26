@@ -8,6 +8,8 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.speech.RecognitionListener
+import android.speech.RecognitionSupport
+import android.speech.RecognitionSupportCallback
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.util.Log
@@ -41,14 +43,11 @@ class VoiceCommandRecognizer(
         private const val MAX_BACKOFF_MS = 3000L
         private const val DUPLICATE_WINDOW_MS = 350L
 
-        // فالوضع متعدد اللغات: إلا ما بدا حتى كلام فهاد المدة نبدلو للغة الموالية (سريع باش ما نضيعوش الأوامر)
-        private const val IDLE_LANGUAGE_SLICE_MS = 1300L
-
         // إلا كان كلام/صوت الفيديو شغال ولا لقينا أمر فهاد المدة -> نبدلو اللغة (باش كل اللغات يجيها الدور)
-        private const val SPEECH_LANGUAGE_SLICE_MS = 2600L
+        private const val SPEECH_LANGUAGE_SLICE_MS = 2500L
 
-        // اللغات اللي كندورو عليها فالوضع "كل اللغات": دارجة، فصحى، English، Français
-        private val ALL_LANGUAGES = listOf("ar-MA", "ar-SA", "en-US", "fr-FR")
+        // اللغات اللي كندورو عليها فالوضع "كل اللغات": دارجة (ar-SA كتعوضها إلا ar-MA ما خدماتش)، English، Français
+        private val ALL_LANGUAGES = listOf("ar-MA", "en-US", "fr-FR")
 
         private val BIASING_WORDS = arrayListOf(
             // دارجة / فصحى
@@ -99,6 +98,10 @@ class VoiceCommandRecognizer(
     // اللغات اللي الخدمة قالت ما كتدعمهاش (خطأ 12/13) -> كنحيدوها أو كنعوضوها (ar-MA -> ar-SA)
     private val unsupportedLanguages = mutableSetOf<String>()
     private var useSystemDefaultLanguage = false
+
+    // اللغات اللي موديل offline ديالها مثبت فالهاتف -> كنفضلو offline (أسرع بكثير: بلا إنترنت وبلا انتظار)
+    private val offlineInstalled = mutableSetOf<String>()
+    private var offlineChecked = false
 
     // الـ recognizer كيسمع بلغة وحدة فكل جلسة -> كندورو بين اللغات باش كل الأوامر (دارجة/عربية/English/Français) تتنفذ
     private var languageIndex = 0
@@ -174,6 +177,8 @@ class VoiceCommandRecognizer(
         if (!isIntentionallyListening) return
 
         try {
+            ensureRecognizerInstance()
+            checkOfflineSupportOnce()
             beginSession()
             listener.onListeningStateChanged(true, "يستمع إلى صوتك…")
         } catch (e: Exception) {
@@ -188,6 +193,55 @@ class VoiceCommandRecognizer(
             speechRecognizer = SpeechRecognizer.createSpeechRecognizer(context).apply {
                 setRecognitionListener(this@VoiceCommandRecognizer)
             }
+        }
+    }
+
+    /**
+     * أندرويد 13+: كنعرفو شنو هي اللغات اللي موديل offline ديالها مثبت، وكنحملو اللي ناقص.
+     * Offline = استجابة شبه فورية (بلا انتظار الإنترنت). إلا ما كانش مدعوم كنبقاو online عادي.
+     */
+    private fun checkOfflineSupportOnce() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU || offlineChecked) return
+        val rec = speechRecognizer ?: return
+        offlineChecked = true
+        try {
+            val probe = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                putExtra(RecognizerIntent.EXTRA_LANGUAGE, ALL_LANGUAGES.first())
+            }
+            rec.checkRecognitionSupport(
+                probe,
+                context.mainExecutor,
+                object : RecognitionSupportCallback {
+                    override fun onSupportAvailable(recognitionSupport: RecognitionSupport) {
+                        val installed = recognitionSupport.installedOnDeviceLanguages
+                        val supported = recognitionSupport.supportedOnDeviceLanguages
+                        offlineInstalled.clear()
+                        offlineInstalled.addAll(installed)
+                        Log.i(TAG, "Offline installed=$installed supported=$supported")
+                        for (lang in ALL_LANGUAGES) {
+                            if (installed.any { it.equals(lang, true) }) continue
+                            if (supported.any { it.equals(lang, true) }) {
+                                try {
+                                    val dl = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                                        putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                                        putExtra(RecognizerIntent.EXTRA_LANGUAGE, lang)
+                                    }
+                                    speechRecognizer?.triggerModelDownload(dl)
+                                } catch (e: Throwable) {
+                                    Log.w(TAG, "Model download for $lang failed: ${e.message}")
+                                }
+                            }
+                        }
+                    }
+
+                    override fun onError(error: Int) {
+                        Log.d(TAG, "checkRecognitionSupport error=$error")
+                    }
+                }
+            )
+        } catch (e: Throwable) {
+            Log.w(TAG, "checkRecognitionSupport unavailable: ${e.message}")
         }
     }
 
@@ -262,11 +316,12 @@ class VoiceCommandRecognizer(
         if (activeLanguages().size > 1) languageIndex++
     }
 
+    /**
+     * ما بقيناش كندورو بين اللغات بمؤقت فالصمت (كان كيخلي التطبيق "أصم" فترات ويضيع الأوامر).
+     * دابا الجلسة كتبقى مفتوحة بنفس اللغة، وكنبدلو اللغة غير إلا سمعنا كلام وما فهمناهش (انظر onResults / onError).
+     */
     private fun armIdleWatchdog() {
         mainHandler.removeCallbacks(idleLanguageRunnable)
-        if (activeLanguages().size > 1) {
-            mainHandler.postDelayed(idleLanguageRunnable, IDLE_LANGUAGE_SLICE_MS)
-        }
     }
 
     /** ما تلقى حتى أمر فهاد اللغة فهاد المدة: نوقفو الجلسة ونبداو بالغة الموالية. */
@@ -345,24 +400,13 @@ class VoiceCommandRecognizer(
                 putStringArrayListExtra(RecognizerIntent.EXTRA_BIASING_STRINGS, BIASING_WORDS)
             }
 
-            // أندرويد 13+: كشف اللغة أوتوماتيكيا بين اللغات المسموحة (كتتجاهلها الخدمات اللي ما كتدعمهاش)
-            val langs = activeLanguages()
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && langs.size > 1) {
-                putExtra("android.speech.extra.ENABLE_LANGUAGE_DETECTION", true)
-                putStringArrayListExtra(
-                    "android.speech.extra.LANGUAGE_DETECTION_ALLOWED_LANGUAGES",
-                    ArrayList(langs)
-                )
-                putExtra("android.speech.extra.ENABLE_LANGUAGE_SWITCH", "quick_response")
-                putStringArrayListExtra(
-                    "android.speech.extra.LANGUAGE_SWITCH_ALLOWED_LANGUAGES",
-                    ArrayList(langs)
-                )
-            }
-
             if (lang != null) {
                 putExtra(RecognizerIntent.EXTRA_LANGUAGE, lang)
                 putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, lang)
+                // موديل offline مثبت لهاد اللغة -> أسرع
+                if (offlineInstalled.any { it.equals(lang, true) }) {
+                    putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
+                }
             }
         }
     }
@@ -422,16 +466,28 @@ class VoiceCommandRecognizer(
             }
 
             // أخطاء عادية (صمت / ما فهمش) : نعاودو بسرعة بلا ما نعتبروها مشكل
-            SpeechRecognizer.ERROR_NO_MATCH,
-            SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> {
+            // سمعنا كلام وما فهمناهش بهاد اللغة -> الجلسة الجاية بلغة أخرى (فورا)
+            SpeechRecognizer.ERROR_NO_MATCH -> {
                 errorStreak = 0
                 advanceLanguage()
+                scheduleRestart(RESTART_NORMAL_DELAY_MS)
+            }
+
+            // صمت: نعاودو بنفس اللغة
+            SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> {
+                errorStreak = 0
                 scheduleRestart(RESTART_NORMAL_DELAY_MS)
             }
 
             // اللغة ما مدعومة / ما محملاش: نحيدوها (ar-MA كنعوضوها بـ ar-SA) ونكملو بالباقي
             ERROR_LANGUAGE_NOT_SUPPORTED,
             ERROR_LANGUAGE_UNAVAILABLE -> {
+                // الموديل offline فشل: نحيدوه ونعاودو online بنفس اللغة
+                val failedLang = currentLanguage
+                if (failedLang != null && offlineInstalled.remove(failedLang)) {
+                    recreateAndRestart(RESTART_NORMAL_DELAY_MS)
+                    return
+                }
                 currentLanguage?.let { unsupportedLanguages.add(it) }
                 if (activeLanguages().isEmpty()) {
                     if (!useSystemDefaultLanguage) {
