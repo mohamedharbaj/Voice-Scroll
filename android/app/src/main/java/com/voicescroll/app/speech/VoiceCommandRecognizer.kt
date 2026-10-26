@@ -3,7 +3,6 @@ package com.voicescroll.app.speech
 import android.content.Context
 import android.content.Intent
 import android.media.AudioManager
-import android.media.MediaRecorder
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -18,15 +17,16 @@ import com.voicescroll.app.engine.CommandMatchResult
 import com.voicescroll.app.model.CommandType
 
 /**
- * High-performance, continuous Speech Recognition Manager using Android's native SpeechRecognizer.
- * Strictly local matching against local aliases. Zero AI / LLM APIs.
- * 
- * Features:
- * - Pre-warmed SpeechRecognizer instance on creation for 0-delay startup.
- * - Hardware acoustic noise suppression against background media audio (TikTok / YouTube / Reels).
- * - Suppression of repetitive system earcons / beep sounds ("تيط تيط") during continuous recognition.
- * - Fast-path partial result matching for instant (<200ms) gesture response.
- * - Dynamic language support for Moroccan Darija (ar-MA), Standard Arabic (ar-SA), French (fr-FR), English (en-US).
+ * Continuous Speech Recognition Manager (Android SpeechRecognizer) + matching محلي ضد القاموس ديال الأوامر.
+ *
+ * الإصلاحات الأساسية فهاد النسخة:
+ *  1. أمر واحد = تنفيذ واحد: من بعد ما كنلقاو الأمر فـ partial result كنحبسو الجلسة (cancel) ونعاودو نبداو،
+ *     باش النتيجة النهائية (final) ما تعاودش تنفذ نفس الأمر مرة أخرى (كان كيدوز فيديوهين).
+ *  2. ما بقيناش كنفرضو PREFER_OFFLINE (ar-MA ما عندوش موديل offline فأغلب الهواتف -> أخطاء 12/13 كتعاود بلا نهاية
+ *     والتطبيق كيبان "ما كيسمعش").
+ *  3. حيدنا extra "android.speech.extra.AUDIO_SOURCE" (فأندرويد 13+ كيتسناو ParcelFileDescriptor ماشي int).
+ *  4. معالجة أخطاء اللغة (12/13) بـ fallback أوتوماتيكي (ar-MA -> ar-SA -> لغة النظام).
+ *  5. Backoff فإعادة التشغيل (بلا حلقة كل 25ms) + إعادة إنشاء الـ recognizer عند أخطاء CLIENT/BUSY/DISCONNECTED.
  */
 class VoiceCommandRecognizer(
     private val context: Context,
@@ -35,9 +35,17 @@ class VoiceCommandRecognizer(
 
     companion object {
         private const val TAG = "VoiceRecognizer"
-        private const val RESTART_NORMAL_DELAY_MS = 25L
-        private const val RESTART_BUSY_DELAY_MS = 300L
-        private const val COOLDOWN_COMMAND_MS = 500L
+        private const val RESTART_NORMAL_DELAY_MS = 60L
+        private const val RESTART_AFTER_COMMAND_MS = 120L
+        private const val RESTART_BUSY_DELAY_MS = 350L
+        private const val MAX_BACKOFF_MS = 3000L
+        private const val DUPLICATE_WINDOW_MS = 350L
+
+        // ثوابت SpeechRecognizer الجديدة (API 31+) كنستعملوها كأرقام باش نبقاو متوافقين مع minSdk 24
+        private const val ERROR_TOO_MANY_REQUESTS = 10
+        private const val ERROR_SERVER_DISCONNECTED = 11
+        private const val ERROR_LANGUAGE_NOT_SUPPORTED = 12
+        private const val ERROR_LANGUAGE_UNAVAILABLE = 13
     }
 
     interface Callback {
@@ -52,43 +60,54 @@ class VoiceCommandRecognizer(
     private val mainHandler = Handler(Looper.getMainLooper())
     private val prefsManager = PreferencesManager(context)
     private val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
-    
+
     @Volatile
     private var isIntentionallyListening = false
     private var isRecognizing = false
     private var isInitialStart = true
+    private var beepsMuted = false
+
+    // true من بعد ما تنفذ أمر فالجلسة الحالية -> نتجاهلو أي نتيجة أخرى حتى تبدأ جلسة جديدة
+    private var commandFiredThisSession = false
     private var lastDispatchedCommand: CommandType = CommandType.NONE
     private var lastDispatchedTime: Long = 0L
 
+    // عدد الأخطاء الحقيقية المتتالية (للـ backoff)
+    private var errorStreak = 0
+
+    // لغة بديلة إلا اللغة المختارة ما كتدعمهاش الخدمة
+    private var languageOverride: String? = null
+    private var useAutoLanguage = false
+
     init {
-        // Pre-warm SpeechRecognizer instance immediately if on main thread
         if (Looper.myLooper() == Looper.getMainLooper()) {
             ensureRecognizerInstance()
         } else {
-            mainHandler.post {
-                ensureRecognizerInstance()
-            }
+            mainHandler.post { ensureRecognizerInstance() }
         }
     }
 
     fun startListening() {
         if (!SpeechRecognizer.isRecognitionAvailable(context)) {
             Log.e(TAG, "Speech recognition is NOT available on this device!")
-            listener.onError(-1, "خدمة التعرف على الصوت غير متوفرة على هذا الجهاز")
+            listener.onError(
+                -1,
+                "خدمة التعرف على الصوت غير متوفرة. تأكد أن تطبيق Google مثبت ومحدّث ومفعّل"
+            )
             return
         }
 
         isIntentionallyListening = true
         isInitialStart = true
+        errorStreak = 0
+        languageOverride = null
+        useAutoLanguage = false
         Log.i(TAG, "startListening requested")
 
-        // Execute immediately if already on Main Thread to avoid any dispatch delay
         if (Looper.myLooper() == Looper.getMainLooper()) {
             startListeningInternal()
         } else {
-            mainHandler.post {
-                startListeningInternal()
-            }
+            mainHandler.post { startListeningInternal() }
         }
     }
 
@@ -121,19 +140,17 @@ class VoiceCommandRecognizer(
         }
     }
 
+    // ------------------------------------------------------------------------------------------
+
     private fun startListeningInternal() {
         if (!isIntentionallyListening) return
 
         try {
             ensureRecognizerInstance()
-            configureAudioEnvironment()
-
-            val intent = createRecognizerIntent()
+            commandFiredThisSession = false
             isRecognizing = true
-            speechRecognizer?.startListening(intent)
-            Log.d(TAG, "SpeechRecognizer startListening invoked immediately")
+            speechRecognizer?.startListening(createRecognizerIntent())
             listener.onListeningStateChanged(true, "يستمع إلى صوتك…")
-
         } catch (e: Exception) {
             Log.e(TAG, "Error invoking startListening, recovering...", e)
             recreateAndRestart(RESTART_BUSY_DELAY_MS)
@@ -149,76 +166,71 @@ class VoiceCommandRecognizer(
         }
     }
 
-    /**
-     * Configures the Android audio subsystem to prevent video playback in other apps
-     * (TikTok, YouTube, Reels) from overwhelming or canceling the microphone input.
-     */
-    private fun configureAudioEnvironment() {
-        try {
-            audioManager?.let { am ->
-                // Ensure microphone is not muted
-                if (am.isMicrophoneMute) {
-                    am.isMicrophoneMute = false
-                }
-            }
-        } catch (_: Exception) {}
-    }
-
-    /**
-     * Mutes system earcon streams temporarily so continuous SpeechRecognizer restarts
-     * do NOT produce repetitive annoying beep sounds ("تيط تيط").
-     * Leaves STREAM_MUSIC untouched so videos play audio normally.
-     */
-    private fun muteBeepStreams() {
-        try {
-            audioManager?.let { am ->
-                am.adjustStreamVolume(AudioManager.STREAM_NOTIFICATION, AudioManager.ADJUST_MUTE, 0)
-                am.adjustStreamVolume(AudioManager.STREAM_SYSTEM, AudioManager.ADJUST_MUTE, 0)
-            }
-        } catch (_: Exception) {}
-    }
-
-    private fun unmuteBeepStreams() {
-        try {
-            audioManager?.let { am ->
-                am.adjustStreamVolume(AudioManager.STREAM_NOTIFICATION, AudioManager.ADJUST_UNMUTE, 0)
-                am.adjustStreamVolume(AudioManager.STREAM_SYSTEM, AudioManager.ADJUST_UNMUTE, 0)
-            }
-        } catch (_: Exception) {}
-    }
-
+    /** نمحيو الـ recognizer القديم ونخلقو واحد جديد من بعد delay. */
     private fun recreateAndRestart(delayMs: Long) {
         if (!isIntentionallyListening) return
         mainHandler.removeCallbacksAndMessages(null)
         try {
             speechRecognizer?.destroy()
-        } catch (_: Exception) {}
+        } catch (_: Exception) {
+        }
         speechRecognizer = null
         isRecognizing = false
 
         mainHandler.postDelayed({
-            if (isIntentionallyListening) {
-                startListeningInternal()
-            }
+            if (isIntentionallyListening) startListeningInternal()
         }, delayMs)
     }
 
+    /** نعاودو الجلسة بنفس الـ recognizer (أسرع، وما كيدير بيب بزاف). */
     private fun scheduleRestart(delayMs: Long = RESTART_NORMAL_DELAY_MS) {
         if (!isIntentionallyListening) return
         mainHandler.removeCallbacksAndMessages(null)
         mainHandler.postDelayed({
-            if (isIntentionallyListening) {
-                try {
-                    val intent = createRecognizerIntent()
-                    muteBeepStreams()
-                    isRecognizing = true
-                    speechRecognizer?.startListening(intent)
-                } catch (e: Exception) {
-                    Log.w(TAG, "Failed quick restart, doing full re-init: ${e.message}")
-                    recreateAndRestart(RESTART_BUSY_DELAY_MS)
-                }
+            if (!isIntentionallyListening) return@postDelayed
+            try {
+                ensureRecognizerInstance()
+                commandFiredThisSession = false
+                muteBeepStreams()
+                isRecognizing = true
+                speechRecognizer?.startListening(createRecognizerIntent())
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed quick restart, doing full re-init: ${e.message}")
+                recreateAndRestart(RESTART_BUSY_DELAY_MS)
             }
         }, delayMs)
+    }
+
+    /** Backoff تدريجي: 100ms, 200ms, 400ms ... حتى 3s. */
+    private fun backoffDelay(): Long {
+        val shift = (errorStreak - 1).coerceIn(0, 5)
+        return (100L shl shift).coerceAtMost(MAX_BACKOFF_MS)
+    }
+
+    private fun muteBeepStreams() {
+        if (beepsMuted) return
+        try {
+            audioManager?.let { am ->
+                am.adjustStreamVolume(AudioManager.STREAM_NOTIFICATION, AudioManager.ADJUST_MUTE, 0)
+                am.adjustStreamVolume(AudioManager.STREAM_SYSTEM, AudioManager.ADJUST_MUTE, 0)
+                beepsMuted = true
+            }
+        } catch (_: Exception) {
+            // بعض الهواتف (DND) كتمنع هادشي، ماشي مشكل
+        }
+    }
+
+    private fun unmuteBeepStreams() {
+        if (!beepsMuted) return
+        try {
+            audioManager?.let { am ->
+                am.adjustStreamVolume(AudioManager.STREAM_NOTIFICATION, AudioManager.ADJUST_UNMUTE, 0)
+                am.adjustStreamVolume(AudioManager.STREAM_SYSTEM, AudioManager.ADJUST_UNMUTE, 0)
+            }
+        } catch (_: Exception) {
+        } finally {
+            beepsMuted = false
+        }
     }
 
     private fun createRecognizerIntent(): Intent {
@@ -227,82 +239,56 @@ class VoiceCommandRecognizer(
             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
             putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, context.packageName)
 
-            // Capture up to 10 hypotheses so even if media audio is at index 0,
-            // our spoken command in subsequent hypotheses is captured
+            // كنطلبو بزاف فرضيات: إلا كان صوت الفيديو هو الأول، أمرنا يبقى فـ الفرضيات الأخرى
             putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 10)
 
-            // Prefer offline local processing on device for minimum latency (<100ms)
-            // and avoiding network contention while streaming video data
-            putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
+            // ملاحظة: ما كنفرضوش PREFER_OFFLINE. الموديل offline ديال ar-MA غالبا ماشي مثبت،
+            // وفرضو كان كيسبب أخطاء لغة كتعاود بلا نهاية.
 
-            // Direct hardware voice recognition acoustic profile with noise reduction
-            putExtra("android.speech.extra.AUDIO_SOURCE", MediaRecorder.AudioSource.VOICE_RECOGNITION)
-
-            // Suppress system earcons and beeps during continuous listening sessions
-            putExtra("android.speech.extras.SPEECH_INPUT_QUIET_MODE", true)
-            putExtra("android.speech.extra.QUIET_MODE", true)
+            // بيب/أصوات النظام
             putExtra("android.speech.extra.SUPPRESS_START_SOUND", true)
             putExtra("android.speech.extra.SUPPRESS_STOP_SOUND", true)
-            putExtra("suppress_earcons", true)
-            putExtra("suppressEarcons", true)
+            putExtra("android.speech.extras.SPEECH_INPUT_QUIET_MODE", true)
 
-            // Minimum length for fast responsiveness (<100ms)
             putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 100L)
+            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 1500L)
+            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 1200L)
 
-            // Keep the listening session alive continuously (8s of silence)
-            // so the user can say multiple commands in succession without restarting the mic or hearing "طيط طيط"
-            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 8000L)
-            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 8000L)
-
-            // Biasing on Android 14+ (API 34) gives priority to our command words over background media dialogue
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                putExtra(
+            // Biasing: EXTRA_BIASING_STRINGS كاين من أندرويد 13 (API 33)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                putStringArrayListExtra(
                     RecognizerIntent.EXTRA_BIASING_STRINGS,
-                    arrayOf(
-                        "دوز", "طلع", "هبط", "رجع", "وقف", "حبس", "صافي", "كمل", "تابع", "ابدأ",
-                        "التالي", "السابق", "دوزها", "طلعها", "هبطها", "رجعها", "وقفها", "طالع", "هابط",
-                        "سير", "زيد", "مرر", "دوزو", "دوزي", "طلعو", "طلعي", "ندوز", "نطلع", "نرجع", "نهبط",
+                    arrayListOf(
+                        "دوز", "طلع", "هبط", "رجع", "وقف", "حبس", "صافي", "كمل", "تابع",
+                        "التالي", "السابق", "دوزها", "طلعها", "هبطها", "رجعها",
                         "next", "up", "previous", "down", "back", "stop", "resume",
                         "suivant", "precedent", "monte", "descends"
                     )
                 )
             }
 
-            val lang = prefsManager.commandLanguage
-            when (lang) {
-                PreferencesManager.LANG_AR_MOROCCO -> {
-                    putExtra(RecognizerIntent.EXTRA_LANGUAGE, "ar-MA")
-                    putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, "ar-MA")
+            if (!useAutoLanguage) {
+                val lang = languageOverride ?: when (prefsManager.commandLanguage) {
+                    PreferencesManager.LANG_AR_MOROCCO -> "ar-MA"
+                    PreferencesManager.LANG_AR_STANDARD -> "ar-SA"
+                    PreferencesManager.LANG_FRENCH -> "fr-FR"
+                    PreferencesManager.LANG_ENGLISH -> "en-US"
+                    PreferencesManager.LANG_AUTO -> null
+                    else -> prefsManager.commandLanguage
                 }
-                PreferencesManager.LANG_AR_STANDARD -> {
-                    putExtra(RecognizerIntent.EXTRA_LANGUAGE, "ar-SA")
-                    putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, "ar-SA")
-                }
-                PreferencesManager.LANG_FRENCH -> {
-                    putExtra(RecognizerIntent.EXTRA_LANGUAGE, "fr-FR")
-                    putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, "fr-FR")
-                }
-                PreferencesManager.LANG_ENGLISH -> {
-                    putExtra(RecognizerIntent.EXTRA_LANGUAGE, "en-US")
-                    putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, "en-US")
-                }
-                PreferencesManager.LANG_AUTO -> {
-                    // Let Android recognize system default locale
-                }
-                else -> {
+                if (lang != null) {
                     putExtra(RecognizerIntent.EXTRA_LANGUAGE, lang)
+                    putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, lang)
                 }
             }
         }
     }
 
-    // --- RecognitionListener Callbacks ---
+    // --- RecognitionListener ---
 
     override fun onReadyForSpeech(params: Bundle?) {
-        Log.d(TAG, "onReadyForSpeech")
         if (isInitialStart) {
             isInitialStart = false
-            // After initial start sound has completed once, mute subsequent earcons
             muteBeepStreams()
         }
         if (isIntentionallyListening) {
@@ -311,7 +297,7 @@ class VoiceCommandRecognizer(
     }
 
     override fun onBeginningOfSpeech() {
-        Log.d(TAG, "onBeginningOfSpeech: speech detected")
+        errorStreak = 0
         if (isIntentionallyListening) {
             listener.onListeningStateChanged(true, "جارٍ التقاط الصوت…")
         }
@@ -324,65 +310,109 @@ class VoiceCommandRecognizer(
     override fun onBufferReceived(buffer: ByteArray?) {}
 
     override fun onEndOfSpeech() {
-        Log.d(TAG, "onEndOfSpeech")
         isRecognizing = false
     }
 
     override fun onError(error: Int) {
         isRecognizing = false
+        Log.d(TAG, "SpeechRecognizer onError: code=$error")
 
-        val errorMessage = when (error) {
-            SpeechRecognizer.ERROR_NO_MATCH -> "لم يتم التقاط كلام (صمت)"
-            SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "انتهت مهلة الصوت"
-            SpeechRecognizer.ERROR_AUDIO -> "خطأ في التقاط الصوت"
-            SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> "يرجى منح إذن الميكروفون"
-            SpeechRecognizer.ERROR_NETWORK_TIMEOUT, SpeechRecognizer.ERROR_NETWORK -> "تعذر الاتصال بخدمة الصوت"
-            SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> "معرّف الصوت مشغول"
-            SpeechRecognizer.ERROR_CLIENT -> "خطأ في التطبيق العميل"
-            SpeechRecognizer.ERROR_SERVER -> "خطأ في خادم الصوت"
-            else -> "كود الخطأ: $error"
-        }
-        Log.d(TAG, "SpeechRecognizer onError: code=$error ($errorMessage)")
+        if (!isIntentionallyListening) return
 
-        if (error == SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS) {
-            isIntentionallyListening = false
-            unmuteBeepStreams()
-            listener.onError(error, errorMessage)
+        // نتيجة الأمر تنفذات من قبل (partial) -> الخطأ ديال الجلسة القديمة ما يهمناش
+        if (commandFiredThisSession) {
+            scheduleRestart(RESTART_AFTER_COMMAND_MS)
             return
         }
 
-        // Automatic non-blocking continuous restart with low latency
-        val delay = when (error) {
-            SpeechRecognizer.ERROR_NO_MATCH,
-            SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> RESTART_NORMAL_DELAY_MS
-            SpeechRecognizer.ERROR_RECOGNIZER_BUSY,
-            SpeechRecognizer.ERROR_CLIENT -> RESTART_BUSY_DELAY_MS
-            else -> 100L
-        }
+        when (error) {
+            SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> {
+                isIntentionallyListening = false
+                unmuteBeepStreams()
+                listener.onError(error, "يرجى منح إذن الميكروفون")
+            }
 
-        scheduleRestart(delay)
+            // أخطاء عادية (صمت / ما فهمش) : نعاودو بسرعة بلا ما نعتبروها مشكل
+            SpeechRecognizer.ERROR_NO_MATCH,
+            SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> {
+                errorStreak = 0
+                scheduleRestart(RESTART_NORMAL_DELAY_MS)
+            }
+
+            // اللغة ما مدعومة / ما محملاش: نبدلو للغة بديلة
+            ERROR_LANGUAGE_NOT_SUPPORTED,
+            ERROR_LANGUAGE_UNAVAILABLE -> {
+                when {
+                    !useAutoLanguage && languageOverride == null &&
+                        prefsManager.commandLanguage == PreferencesManager.LANG_AR_MOROCCO -> {
+                        Log.w(TAG, "ar-MA unsupported -> fallback to ar-SA")
+                        languageOverride = "ar-SA"
+                    }
+                    !useAutoLanguage -> {
+                        Log.w(TAG, "Language unsupported -> fallback to system default")
+                        useAutoLanguage = true
+                    }
+                    else -> {
+                        errorStreak++
+                        listener.onError(error, "لغة التعرف على الصوت غير مدعومة على هذا الجهاز")
+                    }
+                }
+                recreateAndRestart(maxOf(RESTART_BUSY_DELAY_MS, backoffDelay()))
+            }
+
+            // الـ recognizer تعطل / مشغول: نخلقو من جديد
+            SpeechRecognizer.ERROR_CLIENT,
+            SpeechRecognizer.ERROR_RECOGNIZER_BUSY,
+            ERROR_SERVER_DISCONNECTED -> {
+                errorStreak++
+                recreateAndRestart(maxOf(RESTART_BUSY_DELAY_MS, backoffDelay()))
+            }
+
+            ERROR_TOO_MANY_REQUESTS -> {
+                errorStreak++
+                recreateAndRestart(1500L)
+            }
+
+            // شبكة / سيرفر / ميكروفون
+            else -> {
+                errorStreak++
+                if (errorStreak >= 3) {
+                    listener.onError(error, errorMessageFor(error))
+                }
+                recreateAndRestart(backoffDelay())
+            }
+        }
     }
 
     override fun onResults(results: Bundle?) {
-        Log.d(TAG, "onResults received")
         isRecognizing = false
-        processSpeechResults(results, isPartial = false)
+        errorStreak = 0
+        if (!commandFiredThisSession) {
+            processSpeechResults(results, isPartial = false)
+        }
         if (isIntentionallyListening) {
             scheduleRestart(RESTART_NORMAL_DELAY_MS)
         }
     }
 
     override fun onPartialResults(partialResults: Bundle?) {
-        // Fast command matching and execution without stopping or restarting the microphone session!
-        // Keeping the session active avoids the annoying repeated "طيط طيط" sound and enables continuous commands.
-        processSpeechResults(partialResults, isPartial = true)
+        if (commandFiredThisSession) return
+        val fired = processSpeechResults(partialResults, isPartial = true)
+        if (fired && isIntentionallyListening) {
+            // الأمر تنفذ: نحبسو هاد الجلسة (باش النتيجة النهائية ما تعاودش تنفذو) ونبداو جلسة جديدة
+            try {
+                speechRecognizer?.cancel()
+            } catch (_: Exception) {
+            }
+            isRecognizing = false
+            scheduleRestart(RESTART_AFTER_COMMAND_MS)
+        }
     }
 
     override fun onEvent(eventType: Int, params: Bundle?) {}
 
     /**
-     * Inspects recognition results for valid commands.
-     * Returns true if a command was matched and dispatched.
+     * كيفحص النتائج ويدير dispatch للأمر. كيرجع true إلا تنفذ أمر.
      */
     private fun processSpeechResults(bundle: Bundle?, isPartial: Boolean): Boolean {
         val matches = bundle?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION) ?: return false
@@ -397,23 +427,31 @@ class VoiceCommandRecognizer(
 
             val result = CommandEngine.match(trimmed, customAliases)
             if (result.isValid) {
-                // If it's the exact same command type within 350ms, avoid duplicate firing for the same continuous utterance
-                if (result.command == lastDispatchedCommand && (now - lastDispatchedTime < 350L)) {
+                commandFiredThisSession = true
+
+                // حماية إضافية ضد تكرار نفس الأمر فوقت قصير بين جلستين متتاليتين
+                if (result.command == lastDispatchedCommand && now - lastDispatchedTime < DUPLICATE_WINDOW_MS) {
                     return true
                 }
 
                 lastDispatchedCommand = result.command
                 lastDispatchedTime = now
-                Log.i(TAG, "Command recognized: ${result.command} (alias='${result.matchedAlias}', raw='$trimmed', partial=$isPartial)")
+                Log.i(TAG, "Command: ${result.command} (alias='${result.matchedAlias}', raw='$trimmed', partial=$isPartial)")
                 listener.onCommandMatched(result)
                 return true
             }
         }
 
-        if (!isPartial && matches.isNotEmpty()) {
+        if (!isPartial) {
             listener.onUnrecognizedSpeech(matches[0])
         }
-
         return false
+    }
+
+    private fun errorMessageFor(error: Int): String = when (error) {
+        SpeechRecognizer.ERROR_AUDIO -> "خطأ في التقاط الصوت"
+        SpeechRecognizer.ERROR_NETWORK_TIMEOUT, SpeechRecognizer.ERROR_NETWORK -> "تعذر الاتصال بخدمة الصوت"
+        SpeechRecognizer.ERROR_SERVER -> "خطأ في خادم الصوت"
+        else -> "كود الخطأ: $error"
     }
 }
