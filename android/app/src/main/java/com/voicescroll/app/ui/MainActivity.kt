@@ -3,6 +3,7 @@ package com.voicescroll.app.ui
 import android.Manifest
 import android.app.Activity
 import android.app.AlertDialog
+import android.app.AppOpsManager
 import android.content.BroadcastReceiver
 import android.content.ActivityNotFoundException
 import android.content.ComponentName
@@ -44,6 +45,8 @@ class MainActivity : Activity() {
     private var awaitingAccessibility = false
     // true إلا كان المستخدم ضغط على "تشغيل التحكم الصوتي" -> نكملو التشغيل أوتوماتيكيا من بعد التفعيل
     private var startAfterAccessibility = false
+    // true بعد ما نفتحو «معلومات التطبيق» باش المستخدم يسمح بالإعدادات المقيدة
+    private var awaitingAppInfo = false
 
     private lateinit var tvStatusDot: TextView
     private lateinit var tvStatusText: TextView
@@ -129,7 +132,7 @@ class MainActivity : Activity() {
         }
 
         btnFixAccessibility.setOnClickListener {
-            openAccessibilitySettings()
+            requestAccessibility(startAfter = false)
         }
 
         findViewById<ImageButton>(R.id.btnOpenSettings).setOnClickListener {
@@ -157,6 +160,7 @@ class MainActivity : Activity() {
         super.onResume()
         checkAccessibilityStatus()
         handleReturnFromAccessibility()
+        handleReturnFromAppInfo()
         val isServiceActive = VoiceScrollForegroundService.isRunning || prefsManager.isVoiceControlActive
         VoiceScrollForegroundService.updateRunningState(isServiceActive)
         updateControlState()
@@ -229,9 +233,8 @@ class MainActivity : Activity() {
 
     private fun attemptStartVoiceControl() {
         if (!VoiceScrollAccessibilityService.isServiceEnabled(this)) {
-            // مباشرة نوديو المستخدم لصفحة تفعيل الخدمة بلا ديالوغ وسيط
-            startAfterAccessibility = true
-            openAccessibilitySettings()
+            // إلا كانت الخدمة مقفولة (Restricted setting) كتبان النافذة فالحين، وإلا كنفتحو صفحة التفعيل
+            requestAccessibility(startAfter = true)
             return
         }
 
@@ -407,6 +410,49 @@ class MainActivity : Activity() {
         }
     }
 
+    /**
+     * نقطة الدخول الوحيدة لتفعيل خدمة إمكانية الوصول:
+     * إلا كانت مقفولة بـ "Restricted setting" كنبينو النافذة مباشرة (قبل ما نفتحو صفحة Accessibility).
+     */
+    private fun requestAccessibility(startAfter: Boolean) {
+        startAfterAccessibility = startAfter
+        if (isAccessibilityRestricted()) {
+            showRestrictedSettingDialog()
+        } else {
+            openAccessibilitySettings()
+        }
+    }
+
+    /** واش أندرويد 13+ قافل خدمة إمكانية الوصول لهاد التطبيق (Restricted setting). */
+    private fun isAccessibilityRestricted(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return false
+        if (VoiceScrollAccessibilityService.isServiceEnabled(this)) return false
+        return try {
+            val appOps = getSystemService(Context.APP_OPS_SERVICE) as AppOpsManager
+            val mode = appOps.unsafeCheckOpNoThrow(
+                "android:access_restricted_settings",
+                android.os.Process.myUid(),
+                packageName
+            )
+            mode == AppOpsManager.MODE_ERRORED || mode == AppOpsManager.MODE_IGNORED
+        } catch (_: Exception) {
+            // ما قدرناش نتأكدو: نعتمدو على مصدر التثبيت
+            isSideloaded()
+        }
+    }
+
+    /** رجع المستخدم من «معلومات التطبيق»: نكملو لصفحة التفعيل أوتوماتيكيا. */
+    private fun handleReturnFromAppInfo() {
+        if (!awaitingAppInfo) return
+        awaitingAppInfo = false
+        if (VoiceScrollAccessibilityService.isServiceEnabled(this)) return
+        if (isAccessibilityRestricted()) {
+            showRestrictedSettingDialog()
+        } else {
+            openAccessibilitySettings()
+        }
+    }
+
     private fun isSideloaded(): Boolean {
         return try {
             val installer = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
@@ -435,10 +481,14 @@ class MainActivity : Activity() {
                 "1. اضغط على «معلومات التطبيق»\n" +
                 "2. اضغط على القائمة (⋮) فوق اليمين\n" +
                 "3. اختار «السماح بالإعدادات المقيدة»\n" +
-                "4. رجع وضغط على «تفعيل» مرة أخرى"
+                "4. رجع لهنا وغادي نفتح ليك صفحة التفعيل أوتوماتيكيا"
             )
-            .setPositiveButton("معلومات التطبيق") { _, _ -> openAppDetailsSettings() }
-            .setNegativeButton(getString(R.string.btn_cancel), null)
+            .setPositiveButton("معلومات التطبيق") { _, _ ->
+                awaitingAppInfo = true
+                openAppDetailsSettings()
+            }
+            .setNeutralButton("فتح إعدادات الوصول") { _, _ -> openAccessibilitySettings() }
+            .setNegativeButton(getString(R.string.btn_cancel)) { _, _ -> startAfterAccessibility = false }
             .show()
     }
 
