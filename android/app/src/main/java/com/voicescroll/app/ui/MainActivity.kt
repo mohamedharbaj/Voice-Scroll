@@ -32,6 +32,10 @@ class MainActivity : Activity() {
 
     companion object {
         private const val REQ_CODE_RECORD_AUDIO = 201
+        private const val REQ_CODE_POST_NOTIFICATIONS = 202
+
+        /** كيتبعث من زر "تشغيل" فالنوتيفيكاسيو إلا كانت الصلاحيات ناقصة */
+        const val EXTRA_AUTO_START = "extra_auto_start"
     }
 
     private lateinit var prefsManager: PreferencesManager
@@ -75,6 +79,33 @@ class MainActivity : Activity() {
         initViews()
         setupListeners()
         setupLanguageSpinner()
+        requestNotificationPermissionIfNeeded()
+
+        // جا من زر "تشغيل" فالنوتيفيكاسيو (والصلاحيات ناقصة): نكملو التشغيل
+        if (intent?.getBooleanExtra(EXTRA_AUTO_START, false) == true) {
+            attemptStartVoiceControl()
+        }
+    }
+
+    /**
+     * أندرويد 13+: بلا إذن الإشعارات النوتيفيكاسيو (وزر التشغيل/الإيقاف) ما كتبانش نهائياً.
+     */
+    private fun requestNotificationPermissionIfNeeded() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), REQ_CODE_POST_NOTIFICATIONS)
+        }
+    }
+
+    /**
+     * منين خدمة إمكانية الوصول تكون مفعلة والتطبيق موقوف، كنبينو نوتيفيكاسيو فيها زر "تشغيل"
+     * (بحال VPN) باش تشغل التطبيق بلا ما تفتحو.
+     */
+    private fun refreshControlNotification() {
+        if (!VoiceScrollForegroundService.isRunning && VoiceScrollAccessibilityService.isServiceEnabled(this)) {
+            VoiceScrollForegroundService.showStoppedNotification(this)
+        }
     }
 
     private fun initViews() {
@@ -129,6 +160,7 @@ class MainActivity : Activity() {
         val isServiceActive = VoiceScrollForegroundService.isRunning || prefsManager.isVoiceControlActive
         VoiceScrollForegroundService.updateRunningState(isServiceActive)
         updateControlState()
+        refreshControlNotification()
 
         val filter = IntentFilter(VoiceScrollForegroundService.ACTION_BROADCAST_STATUS)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -215,6 +247,13 @@ class MainActivity : Activity() {
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == REQ_CODE_POST_NOTIFICATIONS) {
+            if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                if (VoiceScrollForegroundService.isRunning) return
+                refreshControlNotification()
+            }
+            return
+        }
         if (requestCode == REQ_CODE_RECORD_AUDIO) {
             if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
                 startVoiceControl()
@@ -280,7 +319,7 @@ class MainActivity : Activity() {
             tvStatusDot.text = "●"
             tvStatusDot.setTextColor(getColor(R.color.accent))
             tvStatusText.text = getString(R.string.status_running)
-            tvLastCommandInfo.text = "يستمع لأوامرك (دوز، رجع، وقف، كمل…)"
+            tvLastCommandInfo.text = "يستمع لأوامرك (دوز، رجع، وقف الفيديو، كمل…)"
         } else {
             btnToggleVoice.text = getString(R.string.btn_start_voice_control)
             btnToggleVoice.setBackgroundResource(R.drawable.btn_primary)
