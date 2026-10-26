@@ -41,6 +41,23 @@ class VoiceCommandRecognizer(
         private const val MAX_BACKOFF_MS = 3000L
         private const val DUPLICATE_WINDOW_MS = 350L
 
+        // فالوضع متعدد اللغات: إلا ما بدا حتى كلام فهاد المدة نبدلو للغة الموالية
+        private const val IDLE_LANGUAGE_SLICE_MS = 2200L
+
+        // اللغات اللي كندورو عليها فالوضع "كل اللغات"
+        private val ALL_LANGUAGES = listOf("ar-MA", "en-US", "fr-FR")
+
+        private val BIASING_WORDS = arrayListOf(
+            // دارجة / فصحى
+            "دوز", "طلع", "هبط", "رجع", "وقف", "حبس", "صافي", "كمل", "تابع", "شغل",
+            "التالي", "السابق", "دوزها", "طلعها", "هبطها", "رجعها", "ايقاف مؤقت",
+            // English
+            "next", "up", "previous", "down", "back", "stop", "resume", "pause", "play",
+            "scroll up", "scroll down", "next video", "previous video",
+            // Français
+            "suivant", "precedent", "monte", "descends", "arrete", "continue", "pause"
+        )
+
         // ثوابت SpeechRecognizer الجديدة (API 31+) كنستعملوها كأرقام باش نبقاو متوافقين مع minSdk 24
         private const val ERROR_TOO_MANY_REQUESTS = 10
         private const val ERROR_SERVER_DISCONNECTED = 11
@@ -75,9 +92,15 @@ class VoiceCommandRecognizer(
     // عدد الأخطاء الحقيقية المتتالية (للـ backoff)
     private var errorStreak = 0
 
-    // لغة بديلة إلا اللغة المختارة ما كتدعمهاش الخدمة
-    private var languageOverride: String? = null
-    private var useAutoLanguage = false
+    // اللغات اللي الخدمة قالت ما كتدعمهاش (خطأ 12/13) -> كنحيدوها أو كنعوضوها (ar-MA -> ar-SA)
+    private val unsupportedLanguages = mutableSetOf<String>()
+    private var useSystemDefaultLanguage = false
+
+    // الـ recognizer كيسمع بلغة وحدة فكل جلسة -> كندورو بين اللغات باش كل الأوامر (دارجة/عربية/English/Français) تتنفذ
+    private var languageIndex = 0
+    private var currentLanguage: String? = null
+    private var speechBegun = false
+    private val idleLanguageRunnable = Runnable { onIdleSliceElapsed() }
 
     init {
         if (Looper.myLooper() == Looper.getMainLooper()) {
@@ -100,8 +123,9 @@ class VoiceCommandRecognizer(
         isIntentionallyListening = true
         isInitialStart = true
         errorStreak = 0
-        languageOverride = null
-        useAutoLanguage = false
+        unsupportedLanguages.clear()
+        useSystemDefaultLanguage = false
+        languageIndex = 0
         Log.i(TAG, "startListening requested")
 
         if (Looper.myLooper() == Looper.getMainLooper()) {
@@ -146,10 +170,7 @@ class VoiceCommandRecognizer(
         if (!isIntentionallyListening) return
 
         try {
-            ensureRecognizerInstance()
-            commandFiredThisSession = false
-            isRecognizing = true
-            speechRecognizer?.startListening(createRecognizerIntent())
+            beginSession()
             listener.onListeningStateChanged(true, "يستمع إلى صوتك…")
         } catch (e: Exception) {
             Log.e(TAG, "Error invoking startListening, recovering...", e)
@@ -189,16 +210,71 @@ class VoiceCommandRecognizer(
         mainHandler.postDelayed({
             if (!isIntentionallyListening) return@postDelayed
             try {
-                ensureRecognizerInstance()
-                commandFiredThisSession = false
                 muteBeepStreams()
-                isRecognizing = true
-                speechRecognizer?.startListening(createRecognizerIntent())
+                beginSession()
             } catch (e: Exception) {
                 Log.w(TAG, "Failed quick restart, doing full re-init: ${e.message}")
                 recreateAndRestart(RESTART_BUSY_DELAY_MS)
             }
         }, delayMs)
+    }
+
+    /** كيبدا جلسة استماع جديدة باللغة الحالية ويفعّل مؤقت تبديل اللغة. */
+    private fun beginSession() {
+        ensureRecognizerInstance()
+        commandFiredThisSession = false
+        speechBegun = false
+        currentLanguage = pickLanguage()
+        isRecognizing = true
+        speechRecognizer?.startListening(createRecognizerIntent(currentLanguage))
+        armIdleWatchdog()
+    }
+
+    /** اللغات النشطة حسب اختيار المستخدم، بعد حذف/تعويض اللغات غير المدعومة. */
+    private fun activeLanguages(): List<String> {
+        if (useSystemDefaultLanguage) return emptyList()
+        val chosen = prefsManager.commandLanguage
+        val base = when (chosen) {
+            PreferencesManager.LANG_AUTO -> ALL_LANGUAGES
+            else -> listOf(chosen)
+        }
+        val result = LinkedHashSet<String>()
+        for (lang in base) {
+            when {
+                lang !in unsupportedLanguages -> result.add(lang)
+                lang == "ar-MA" && "ar-SA" !in unsupportedLanguages -> result.add("ar-SA")
+            }
+        }
+        return result.toList()
+    }
+
+    private fun pickLanguage(): String? {
+        val langs = activeLanguages()
+        if (langs.isEmpty()) return null
+        return langs[languageIndex % langs.size]
+    }
+
+    private fun advanceLanguage() {
+        if (activeLanguages().size > 1) languageIndex++
+    }
+
+    private fun armIdleWatchdog() {
+        mainHandler.removeCallbacks(idleLanguageRunnable)
+        if (activeLanguages().size > 1) {
+            mainHandler.postDelayed(idleLanguageRunnable, IDLE_LANGUAGE_SLICE_MS)
+        }
+    }
+
+    /** ما تكلم حتى واحد فهاد اللغة: نوقفو الجلسة ونبداو بالغة الموالية. */
+    private fun onIdleSliceElapsed() {
+        if (!isIntentionallyListening || speechBegun || commandFiredThisSession) return
+        try {
+            speechRecognizer?.cancel()
+        } catch (_: Exception) {
+        }
+        isRecognizing = false
+        advanceLanguage()
+        scheduleRestart(40L)
     }
 
     /** Backoff تدريجي: 100ms, 200ms, 400ms ... حتى 3s. */
@@ -233,7 +309,7 @@ class VoiceCommandRecognizer(
         }
     }
 
-    private fun createRecognizerIntent(): Intent {
+    private fun createRecognizerIntent(lang: String?): Intent {
         return Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
@@ -254,32 +330,20 @@ class VoiceCommandRecognizer(
             putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 1500L)
             putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 1200L)
 
+            // لغات إضافية (كتعتمدها بعض خدمات Google؛ وإلا ما عرفاتهاش كتتجاهلها)
+            putStringArrayListExtra(
+                "android.speech.extra.ADDITIONAL_LANGUAGES",
+                ArrayList(ALL_LANGUAGES.filter { it != lang })
+            )
+
             // Biasing: EXTRA_BIASING_STRINGS كاين من أندرويد 13 (API 33)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                putStringArrayListExtra(
-                    RecognizerIntent.EXTRA_BIASING_STRINGS,
-                    arrayListOf(
-                        "دوز", "طلع", "هبط", "رجع", "وقف", "حبس", "صافي", "كمل", "تابع",
-                        "التالي", "السابق", "دوزها", "طلعها", "هبطها", "رجعها",
-                        "next", "up", "previous", "down", "back", "stop", "resume",
-                        "suivant", "precedent", "monte", "descends"
-                    )
-                )
+                putStringArrayListExtra(RecognizerIntent.EXTRA_BIASING_STRINGS, BIASING_WORDS)
             }
 
-            if (!useAutoLanguage) {
-                val lang = languageOverride ?: when (prefsManager.commandLanguage) {
-                    PreferencesManager.LANG_AR_MOROCCO -> "ar-MA"
-                    PreferencesManager.LANG_AR_STANDARD -> "ar-SA"
-                    PreferencesManager.LANG_FRENCH -> "fr-FR"
-                    PreferencesManager.LANG_ENGLISH -> "en-US"
-                    PreferencesManager.LANG_AUTO -> null
-                    else -> prefsManager.commandLanguage
-                }
-                if (lang != null) {
-                    putExtra(RecognizerIntent.EXTRA_LANGUAGE, lang)
-                    putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, lang)
-                }
+            if (lang != null) {
+                putExtra(RecognizerIntent.EXTRA_LANGUAGE, lang)
+                putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, lang)
             }
         }
     }
@@ -297,6 +361,8 @@ class VoiceCommandRecognizer(
     }
 
     override fun onBeginningOfSpeech() {
+        speechBegun = true
+        mainHandler.removeCallbacks(idleLanguageRunnable)
         errorStreak = 0
         if (isIntentionallyListening) {
             listener.onListeningStateChanged(true, "جارٍ التقاط الصوت…")
@@ -336,26 +402,24 @@ class VoiceCommandRecognizer(
             SpeechRecognizer.ERROR_NO_MATCH,
             SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> {
                 errorStreak = 0
+                advanceLanguage()
                 scheduleRestart(RESTART_NORMAL_DELAY_MS)
             }
 
-            // اللغة ما مدعومة / ما محملاش: نبدلو للغة بديلة
+            // اللغة ما مدعومة / ما محملاش: نحيدوها (ar-MA كنعوضوها بـ ar-SA) ونكملو بالباقي
             ERROR_LANGUAGE_NOT_SUPPORTED,
             ERROR_LANGUAGE_UNAVAILABLE -> {
-                when {
-                    !useAutoLanguage && languageOverride == null &&
-                        prefsManager.commandLanguage == PreferencesManager.LANG_AR_MOROCCO -> {
-                        Log.w(TAG, "ar-MA unsupported -> fallback to ar-SA")
-                        languageOverride = "ar-SA"
-                    }
-                    !useAutoLanguage -> {
-                        Log.w(TAG, "Language unsupported -> fallback to system default")
-                        useAutoLanguage = true
-                    }
-                    else -> {
+                currentLanguage?.let { unsupportedLanguages.add(it) }
+                if (activeLanguages().isEmpty()) {
+                    if (!useSystemDefaultLanguage) {
+                        Log.w(TAG, "No supported language left -> system default")
+                        useSystemDefaultLanguage = true
+                    } else {
                         errorStreak++
                         listener.onError(error, "لغة التعرف على الصوت غير مدعومة على هذا الجهاز")
                     }
+                } else {
+                    Log.w(TAG, "Language $currentLanguage unsupported -> using ${activeLanguages()}")
                 }
                 recreateAndRestart(maxOf(RESTART_BUSY_DELAY_MS, backoffDelay()))
             }
@@ -388,8 +452,11 @@ class VoiceCommandRecognizer(
         isRecognizing = false
         errorStreak = 0
         if (!commandFiredThisSession) {
-            processSpeechResults(results, isPartial = false)
+            val fired = processSpeechResults(results, isPartial = false)
+            // ما تفهمش الأمر بهاد اللغة -> الجلسة الجاية بلغة أخرى
+            if (!fired) advanceLanguage()
         }
+        mainHandler.removeCallbacks(idleLanguageRunnable)
         if (isIntentionallyListening) {
             scheduleRestart(RESTART_NORMAL_DELAY_MS)
         }
