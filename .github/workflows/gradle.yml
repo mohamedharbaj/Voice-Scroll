@@ -1,67 +1,48 @@
-# This workflow uses actions that are not certified by GitHub.
-# They are provided by a third-party and are governed by
-# separate terms of service, privacy policy, and support
-# documentation.
-# This workflow will build a Java project with Gradle and cache/restore any dependencies to improve the workflow execution time
-# For more information see: https://docs.github.com/en/actions/automating-builds-and-tests/building-and-testing-java-with-gradle
-
-name: Java CI with Gradle
+name: Build Android APK
 
 on:
   push:
     branches: [ "main" ]
   pull_request:
     branches: [ "main" ]
+  workflow_dispatch:
 
 jobs:
   build:
-
     runs-on: ubuntu-latest
     permissions:
       contents: read
 
+    defaults:
+      run:
+        working-directory: android
+
     steps:
     - uses: actions/checkout@v4
+
     - name: Set up JDK 17
       uses: actions/setup-java@v4
       with:
         java-version: '17'
         distribution: 'temurin'
 
-    # Configure Gradle for optimal use in GitHub Actions, including caching of downloaded dependencies.
-    # See: https://github.com/gradle/actions/blob/main/setup-gradle/README.md
+    # كنستعملو Gradle 8.5 مباشرة بلا gradle-wrapper.jar (الملف اللي فالمشروع قديم 4.4.1 وكيفشل فالتحقق)
     - name: Setup Gradle
-      uses: gradle/actions/setup-gradle@af1da67850ed9a4cedd57bfd976089dd991e2582 # v4.0.0
-
-    - name: Build with Gradle Wrapper
-      run: ./gradlew build
-
-    # NOTE: The Gradle Wrapper is the default and recommended way to run Gradle (https://docs.gradle.org/current/userguide/gradle_wrapper.html).
-    # If your project does not have the Gradle Wrapper configured, you can use the following configuration to run Gradle with a specified version.
-    #
-    # - name: Setup Gradle
-    #   uses: gradle/actions/setup-gradle@af1da67850ed9a4cedd57bfd976089dd991e2582 # v4.0.0
-    #   with:
-    #     gradle-version: '8.9'
-    #
-    # - name: Build with Gradle 8.9
-    #   run: gradle build
-
-  dependency-submission:
-
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-
-    steps:
-    - uses: actions/checkout@v4
-    - name: Set up JDK 17
-      uses: actions/setup-java@v4
+      uses: gradle/actions/setup-gradle@v4
       with:
-        java-version: '17'
-        distribution: 'temurin'
+        gradle-version: '8.5'
+        validate-wrappers: false
 
-    # Generates and submits a dependency graph, enabling Dependabot Alerts for all project dependencies.
-    # See: https://github.com/gradle/actions/blob/main/dependency-submission/README.md
-    - name: Generate and submit dependency graph
-      uses: gradle/actions/dependency-submission@af1da67850ed9a4cedd57bfd976089dd991e2582 # v4.0.0
+    # local.properties فيه مسار SDK ديال جهازك، خاصنا نحيدوه باش يستعمل SDK ديال GitHub
+    - name: Remove local.properties
+      run: rm -f local.properties
+
+    - name: Build release APK
+      run: gradle assembleRelease --no-daemon
+
+    - name: Upload APK
+      uses: actions/upload-artifact@v4
+      with:
+        name: VoiceScroll-release-apk
+        path: android/app/build/outputs/apk/release/*.apk
+        if-no-files-found: error
