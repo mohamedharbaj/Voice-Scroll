@@ -4,6 +4,8 @@ import android.Manifest
 import android.app.Activity
 import android.app.AlertDialog
 import android.content.BroadcastReceiver
+import android.content.ActivityNotFoundException
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
@@ -33,6 +35,11 @@ class MainActivity : Activity() {
     }
 
     private lateinit var prefsManager: PreferencesManager
+
+    // true بعد ما نفتحو صفحة الخدمة ديال إمكانية الوصول، باش فـ onResume نعرفو واش رجع المستخدم منها
+    private var awaitingAccessibility = false
+    // true إلا كان المستخدم ضغط على "تشغيل التحكم الصوتي" -> نكملو التشغيل أوتوماتيكيا من بعد التفعيل
+    private var startAfterAccessibility = false
 
     private lateinit var tvStatusDot: TextView
     private lateinit var tvStatusText: TextView
@@ -118,6 +125,7 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
         checkAccessibilityStatus()
+        handleReturnFromAccessibility()
         val isServiceActive = VoiceScrollForegroundService.isRunning || prefsManager.isVoiceControlActive
         VoiceScrollForegroundService.updateRunningState(isServiceActive)
         updateControlState()
@@ -189,7 +197,9 @@ class MainActivity : Activity() {
 
     private fun attemptStartVoiceControl() {
         if (!VoiceScrollAccessibilityService.isServiceEnabled(this)) {
-            showAccessibilityRequiredDialog()
+            // مباشرة نوديو المستخدم لصفحة تفعيل الخدمة بلا ديالوغ وسيط
+            startAfterAccessibility = true
+            openAccessibilitySettings()
             return
         }
 
@@ -292,16 +302,105 @@ class MainActivity : Activity() {
         }
     }
 
+    /**
+     * أندرويد ما كيسمحش لتطبيق يفعّل خدمة إمكانية الوصول بوحدو.
+     * أحسن حل هو نفتحو مباشرة صفحة خدمة Voice Scroll (ماشي لائحة إمكانية الوصول كاملة)،
+     * وهنا المستخدم غير كيفعّل المفتاح (Switch) ويأكد.
+     */
     private fun openAccessibilitySettings() {
+        awaitingAccessibility = true
+        val component = ComponentName(this, VoiceScrollAccessibilityService::class.java)
+        val flat = component.flattenToString()
+
+        Toast.makeText(this, "فعّل «Voice Scroll» ثم اضغط موافق", Toast.LENGTH_LONG).show()
+
+        // 1) الصفحة المباشرة ديال الخدمة (أندرويد 14+ وبعض الهواتف)
         try {
+            val details = Intent("android.settings.ACCESSIBILITY_DETAILS_SETTINGS").apply {
+                putExtra(Intent.EXTRA_COMPONENT_NAME, flat)
+                putExtra("android.provider.extra.ACCESSIBILITY_SERVICE_COMPONENT_NAME", flat)
+            }
+            startActivity(details)
+            return
+        } catch (_: Exception) {
+        }
+
+        // 2) لائحة إمكانية الوصول مع تحديد (highlight) الخدمة ديالنا
+        try {
+            val argsKey = ":settings:fragment_args_key"
+            val showArgsKey = ":settings:show_fragment_args"
+            val bundle = Bundle().apply { putString(argsKey, flat) }
             val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                putExtra(argsKey, flat)
+                putExtra(showArgsKey, bundle)
             }
             startActivity(intent)
+            return
         } catch (_: Exception) {
-            val fallback = Intent(Settings.ACTION_SETTINGS)
-            startActivity(fallback)
         }
+
+        // 3) آخر حل
+        try {
+            startActivity(Intent(Settings.ACTION_SETTINGS))
+        } catch (_: ActivityNotFoundException) {
+            awaitingAccessibility = false
+        }
+    }
+
+    private fun handleReturnFromAccessibility() {
+        if (!awaitingAccessibility) return
+        awaitingAccessibility = false
+
+        if (VoiceScrollAccessibilityService.isServiceEnabled(this)) {
+            // تفعّلات الخدمة: إلا كان المستخدم ضغط على "تشغيل" نكملو مباشرة
+            if (startAfterAccessibility) {
+                startAfterAccessibility = false
+                attemptStartVoiceControl()
+            }
+            return
+        }
+
+        startAfterAccessibility = false
+        // الخدمة باقا ما تفعلاتش: على أندرويد 13+ إلا كان التطبيق مثبت من خارج المتجر
+        // الخدمة كتكون مقفولة بـ "Restricted setting" ولازم السماح من معلومات التطبيق
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && isSideloaded()) {
+            showRestrictedSettingDialog()
+        }
+    }
+
+    private fun isSideloaded(): Boolean {
+        return try {
+            val installer = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                packageManager.getInstallSourceInfo(packageName).installingPackageName
+            } else {
+                @Suppress("DEPRECATION")
+                packageManager.getInstallerPackageName(packageName)
+            }
+            installer !in setOf(
+                "com.android.vending",
+                "com.sec.android.app.samsungapps",
+                "com.huawei.appmarket",
+                "com.amazon.venezia"
+            )
+        } catch (_: Exception) {
+            true
+        }
+    }
+
+    private fun showRestrictedSettingDialog() {
+        AlertDialog.Builder(this)
+            .setTitle("خدمة إمكانية الوصول مقفولة")
+            .setMessage(
+                "أندرويد كيقفل هاد الخيار فالتطبيقات المثبتة من خارج المتجر (Restricted setting).\n\n" +
+                "للسماح به مرة وحدة:\n" +
+                "1. اضغط على «معلومات التطبيق»\n" +
+                "2. اضغط على القائمة (⋮) فوق اليمين\n" +
+                "3. اختار «السماح بالإعدادات المقيدة»\n" +
+                "4. رجع وضغط على «تفعيل» مرة أخرى"
+            )
+            .setPositiveButton("معلومات التطبيق") { _, _ -> openAppDetailsSettings() }
+            .setNegativeButton(getString(R.string.btn_cancel), null)
+            .show()
     }
 
     private fun openAppDetailsSettings() {
@@ -309,30 +408,6 @@ class MainActivity : Activity() {
             data = Uri.fromParts("package", packageName, null)
         }
         startActivity(intent)
-    }
-
-    private fun showAccessibilityRequiredDialog() {
-        val builder = AlertDialog.Builder(this)
-            .setTitle("تفعيل إمكانية الوصول")
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            builder.setMessage("${getString(R.string.msg_accessibility_required)}\n\n" +
-                    "ملاحظة لأندرويد 13 فما فوق:\n" +
-                    "إذا ظهرت رسالة 'إعداد مقيد' (Restricted setting)، اضغط على زر 'معلومات التطبيق'، ثم اضغط على القائمة (⋮) أعلى اليمين واختر 'السماح بالإعدادات المقيدة'.")
-                .setPositiveButton(getString(R.string.btn_enable_accessibility)) { _, _ ->
-                    openAccessibilitySettings()
-                }
-                .setNeutralButton("معلومات التطبيق") { _, _ ->
-                    openAppDetailsSettings()
-                }
-                .setNegativeButton(getString(R.string.btn_cancel), null)
-        } else {
-            builder.setMessage(getString(R.string.msg_accessibility_required))
-                .setPositiveButton(getString(R.string.btn_enable_accessibility)) { _, _ ->
-                    openAccessibilitySettings()
-                }
-                .setNegativeButton(getString(R.string.btn_cancel), null)
-        }
-        builder.show()
     }
 
     private fun showPermissionDeniedDialog() {
