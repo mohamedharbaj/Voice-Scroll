@@ -57,7 +57,7 @@ class SettingsActivity : Activity() {
             "العربية الفصحى (ar-SA)" to PreferencesManager.LANG_AR_STANDARD,
             "Français (fr-FR)" to PreferencesManager.LANG_FRENCH,
             "English (en-US)" to PreferencesManager.LANG_ENGLISH,
-            "تلقائي (Auto)" to PreferencesManager.LANG_AUTO
+            "كل اللغات (دارجة + English + Français)" to PreferencesManager.LANG_AUTO
         )
 
         val adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, languages.map { it.first })
