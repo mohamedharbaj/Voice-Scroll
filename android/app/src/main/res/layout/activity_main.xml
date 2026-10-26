@@ -384,7 +384,7 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:layout_marginEnd="8dp"
-                    android:text="توقف، وقف، حبس، صافي، stop"
+                    android:text="وقف الفيديو: وقف، قف، حبس، توقف، stop"
                     android:textColor="@color/text_muted"
                     android:textSize="13sp" />
 
@@ -407,7 +407,7 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:layout_marginEnd="8dp"
-                    android:text="متابعة، كمل، تابع، أبدأ، resume"
+                    android:text="تشغيل الفيديو: كمل، تابع، شغل، resume"
                     android:textColor="@color/text_muted"
                     android:textSize="13sp" />
 
@@ -505,7 +505,7 @@
                 android:layout_height="wrap_content"
                 android:gravity="end"
                 android:lineSpacingExtra="2dp"
-                android:text="4. انطق الأوامر: &quot;دوز&quot; أو &quot;طلع&quot; للتالي، &quot;رجع&quot; أو &quot;هبط&quot; للسابق، &quot;وقف&quot; للإيقاف."
+                android:text="4. انطق الأوامر: &quot;دوز&quot; أو &quot;طلع&quot; للتالي، &quot;رجع&quot; أو &quot;هبط&quot; للسابق، &quot;وقف&quot; لإيقاف الفيديو (التطبيق يبقى خدام، وتوقفو من الإشعار)."
                 android:textColor="@color/text_muted"
                 android:textSize="12sp" />
         </LinearLayout>
