@@ -41,11 +41,14 @@ class VoiceCommandRecognizer(
         private const val MAX_BACKOFF_MS = 3000L
         private const val DUPLICATE_WINDOW_MS = 350L
 
-        // فالوضع متعدد اللغات: إلا ما بدا حتى كلام فهاد المدة نبدلو للغة الموالية
-        private const val IDLE_LANGUAGE_SLICE_MS = 2200L
+        // فالوضع متعدد اللغات: إلا ما بدا حتى كلام فهاد المدة نبدلو للغة الموالية (سريع باش ما نضيعوش الأوامر)
+        private const val IDLE_LANGUAGE_SLICE_MS = 1300L
 
-        // اللغات اللي كندورو عليها فالوضع "كل اللغات"
-        private val ALL_LANGUAGES = listOf("ar-MA", "en-US", "fr-FR")
+        // إلا كان كلام/صوت الفيديو شغال ولا لقينا أمر فهاد المدة -> نبدلو اللغة (باش كل اللغات يجيها الدور)
+        private const val SPEECH_LANGUAGE_SLICE_MS = 2600L
+
+        // اللغات اللي كندورو عليها فالوضع "كل اللغات": دارجة، فصحى، English، Français
+        private val ALL_LANGUAGES = listOf("ar-MA", "ar-SA", "en-US", "fr-FR")
 
         private val BIASING_WORDS = arrayListOf(
             // دارجة / فصحى
@@ -53,7 +56,8 @@ class VoiceCommandRecognizer(
             "التالي", "السابق", "دوزها", "طلعها", "هبطها", "رجعها", "ايقاف مؤقت",
             // English
             "next", "up", "previous", "down", "back", "stop", "resume", "pause", "play",
-            "scroll up", "scroll down", "next video", "previous video",
+            "scroll up", "scroll down", "next video", "previous video", "stop video", "pause video",
+            "قف", "توقف", "اوقف", "وقف الفيديو", "حبس الفيديو",
             // Français
             "suivant", "precedent", "monte", "descends", "arrete", "continue", "pause"
         )
@@ -265,9 +269,9 @@ class VoiceCommandRecognizer(
         }
     }
 
-    /** ما تكلم حتى واحد فهاد اللغة: نوقفو الجلسة ونبداو بالغة الموالية. */
+    /** ما تلقى حتى أمر فهاد اللغة فهاد المدة: نوقفو الجلسة ونبداو بالغة الموالية. */
     private fun onIdleSliceElapsed() {
-        if (!isIntentionallyListening || speechBegun || commandFiredThisSession) return
+        if (!isIntentionallyListening || commandFiredThisSession) return
         try {
             speechRecognizer?.cancel()
         } catch (_: Exception) {
@@ -341,6 +345,21 @@ class VoiceCommandRecognizer(
                 putStringArrayListExtra(RecognizerIntent.EXTRA_BIASING_STRINGS, BIASING_WORDS)
             }
 
+            // أندرويد 13+: كشف اللغة أوتوماتيكيا بين اللغات المسموحة (كتتجاهلها الخدمات اللي ما كتدعمهاش)
+            val langs = activeLanguages()
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && langs.size > 1) {
+                putExtra("android.speech.extra.ENABLE_LANGUAGE_DETECTION", true)
+                putStringArrayListExtra(
+                    "android.speech.extra.LANGUAGE_DETECTION_ALLOWED_LANGUAGES",
+                    ArrayList(langs)
+                )
+                putExtra("android.speech.extra.ENABLE_LANGUAGE_SWITCH", "quick_response")
+                putStringArrayListExtra(
+                    "android.speech.extra.LANGUAGE_SWITCH_ALLOWED_LANGUAGES",
+                    ArrayList(langs)
+                )
+            }
+
             if (lang != null) {
                 putExtra(RecognizerIntent.EXTRA_LANGUAGE, lang)
                 putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, lang)
@@ -362,7 +381,11 @@ class VoiceCommandRecognizer(
 
     override fun onBeginningOfSpeech() {
         speechBegun = true
+        // ما كنحيدوش المؤقت: كنبدلوه بمؤقت أطول، باش حتى مع كلام الفيديو كل لغة يجيها الدور
         mainHandler.removeCallbacks(idleLanguageRunnable)
+        if (activeLanguages().size > 1 && !commandFiredThisSession) {
+            mainHandler.postDelayed(idleLanguageRunnable, SPEECH_LANGUAGE_SLICE_MS)
+        }
         errorStreak = 0
         if (isIntentionallyListening) {
             listener.onListeningStateChanged(true, "جارٍ التقاط الصوت…")
@@ -495,6 +518,12 @@ class VoiceCommandRecognizer(
             val result = CommandEngine.match(trimmed, customAliases)
             if (result.isValid) {
                 commandFiredThisSession = true
+
+                // اللغة اللي خدمات دابا كتبقى هي الأولى فالجلسة الجاية (المستخدم غالبا كيعاود بنفس اللغة)
+                currentLanguage?.let { lang ->
+                    val idx = activeLanguages().indexOf(lang)
+                    if (idx >= 0) languageIndex = idx
+                }
 
                 // حماية إضافية ضد تكرار نفس الأمر فوقت قصير بين جلستين متتاليتين
                 if (result.command == lastDispatchedCommand && now - lastDispatchedTime < DUPLICATE_WINDOW_MS) {
