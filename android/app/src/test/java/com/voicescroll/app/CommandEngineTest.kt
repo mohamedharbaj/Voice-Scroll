@@ -57,7 +57,7 @@ class CommandEngineTest {
     }
 
     @Test
-    fun testStopCommands() {
+    fun testStopWordsPauseTheVideo() {
         val stopPhrases = listOf(
             "وقف",
             "حبس",
@@ -69,8 +69,21 @@ class CommandEngineTest {
         )
         for (phrase in stopPhrases) {
             val result = CommandEngine.match(phrase)
-            assertEquals("Phrase '$phrase' should match STOP", CommandType.STOP, result.command)
+            assertEquals("Phrase '$phrase' should match PAUSE (stop video)", CommandType.PAUSE, result.command)
         }
+    }
+
+    @Test
+    fun testStopListeningNeedsExplicitPhrase() {
+        // الكلمات العادية = إيقاف الفيديو فقط (ماشي إيقاف التطبيق)
+        assertEquals(CommandType.PAUSE, CommandEngine.match("stop").command)
+        assertEquals(CommandType.PAUSE, CommandEngine.match("وقف").command)
+        assertEquals(CommandType.PAUSE, CommandEngine.match("قف").command)
+        assertEquals(CommandType.PAUSE, CommandEngine.match("وقف الفيديو").command)
+        // إيقاف التطبيق = فقط بعبارة صريحة
+        assertEquals(CommandType.STOP, CommandEngine.match("stop listening").command)
+        assertEquals(CommandType.STOP, CommandEngine.match("وقف الاستماع").command)
+        assertEquals(CommandType.STOP, CommandEngine.match("arrête d'écouter").command)
     }
 
     @Test
@@ -84,8 +97,8 @@ class CommandEngineTest {
         assertEquals(CommandType.PREVIOUS, CommandEngine.match("هبط عفاك").command)
         assertEquals(CommandType.PREVIOUS, CommandEngine.match("go back please").command)
 
-        assertEquals(CommandType.STOP, CommandEngine.match("صافي وقف").command)
-        assertEquals(CommandType.STOP, CommandEngine.match("حبس دابا").command)
+        assertEquals(CommandType.PAUSE, CommandEngine.match("صافي وقف").command)
+        assertEquals(CommandType.PAUSE, CommandEngine.match("حبس دابا").command)
     }
 
     @Test
@@ -96,12 +109,12 @@ class CommandEngineTest {
         assertEquals(CommandType.NEXT, CommandEngine.match("وطلع").command)
         assertEquals(CommandType.PREVIOUS, CommandEngine.match("وهبط").command)
         assertEquals(CommandType.PREVIOUS, CommandEngine.match("ورجع").command)
-        assertEquals(CommandType.STOP, CommandEngine.match("ووقف").command)
+        assertEquals(CommandType.PAUSE, CommandEngine.match("ووقف").command)
 
         // Elongated words when speaking loudly over media audio
         assertEquals(CommandType.NEXT, CommandEngine.match("دووووز").command)
         assertEquals(CommandType.NEXT, CommandEngine.match("ططلع").command)
-        assertEquals(CommandType.STOP, CommandEngine.match("صااافي").command)
+        assertEquals(CommandType.PAUSE, CommandEngine.match("صااافي").command)
 
         // Command spoken inside video dialogue sentence
         assertEquals(CommandType.NEXT, CommandEngine.match("شوف هاد الفيديو دوز دابا").command)
@@ -125,10 +138,10 @@ class CommandEngineTest {
         assertEquals(CommandType.PREVIOUS, CommandEngine.match("ارجع").command)
         assertEquals(CommandType.PREVIOUS, CommandEngine.match("رجّع").command)
 
-        assertEquals(CommandType.STOP, CommandEngine.match("وقف").command)
-        assertEquals(CommandType.STOP, CommandEngine.match("وقّف").command)
-        assertEquals(CommandType.STOP, CommandEngine.match("حبس").command)
-        assertEquals(CommandType.STOP, CommandEngine.match("صافي").command)
+        assertEquals(CommandType.PAUSE, CommandEngine.match("وقف").command)
+        assertEquals(CommandType.PAUSE, CommandEngine.match("وقّف").command)
+        assertEquals(CommandType.PAUSE, CommandEngine.match("حبس").command)
+        assertEquals(CommandType.PAUSE, CommandEngine.match("صافي").command)
     }
 
     @Test
@@ -147,13 +160,13 @@ class CommandEngineTest {
             "tla3" to CommandType.NEXT,
             "hbat" to CommandType.PREVIOUS,
             "rje3" to CommandType.PREVIOUS,
-            "wa9ef" to CommandType.STOP,
-            "7bs" to CommandType.STOP,
+            "wa9ef" to CommandType.PAUSE,
+            "7bs" to CommandType.PAUSE,
             "kml" to CommandType.RESUME,
             // English/French as written in Arabic script
             "نكست" to CommandType.NEXT,
             "بريفيوس" to CommandType.PREVIOUS,
-            "ستوب" to CommandType.STOP,
+            "ستوب" to CommandType.PAUSE,
             "ريزوم" to CommandType.RESUME,
             "بوز" to CommandType.PAUSE,
             // Accents are ignored
