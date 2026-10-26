@@ -49,6 +49,49 @@ object CommandEngine {
             "زيد",
             "فوق",
             "للفوق",
+            "دوس",
+            "دوزز",
+            "تلع",
+            "الفيديو لي بعد",
+            "فيديو جديد",
+            // Darija written in Latin letters (what en/fr recognizers usually output)
+            "doz",
+            "dooz",
+            "dawz",
+            "douz",
+            "dowz",
+            "dwz",
+            "doze",
+            "dos",
+            "tla3",
+            "tla",
+            "tl3",
+            "tlaa",
+            "tlla3",
+            "tal3",
+            "tla3 lfo9",
+            "dwzha",
+            "tla3ha",
+            "zid",
+            "fo9",
+            "lfo9",
+            "fouq",
+            // English / French words as heard by the Arabic recognizer
+            "نكست",
+            "نيكست",
+            "نكسط",
+            "نيكست فيديو",
+            "اب",
+            "سكرول",
+            "سكرول اب",
+            "سوايب اب",
+            "سويفان",
+            "سوفان",
+            "سويفون",
+            "سوفون",
+            "سيفان",
+            "مونت",
+            "مون",
             // French
             "suivant",
             "suivante",
@@ -61,13 +104,25 @@ object CommandEngine {
             "passe à la suivante",
             "vers le haut",
             "monte",
+            "suivante video",
+            "video d apres",
+            "plus haut",
+            "haut",
             // English
             "next",
             "next video",
             "scroll",
             "scroll up",
             "swipe up",
-            "up"
+            "up",
+            "next one",
+            "next please",
+            "please next",
+            "go next",
+            "go up",
+            "skip",
+            "skip video",
+            "next clip"
         ),
 
         CommandType.PREVIOUS to listOf(
@@ -105,6 +160,49 @@ object CommandEngine {
             "الفيديو لي فات",
             "تحت",
             "لتحت",
+            "هبت",
+            "هبطط",
+            "الفيديو لي قبل",
+            "الفيديو اللي قبل",
+            "الفيديو القبلي",
+            "لور",
+            // Darija written in Latin letters
+            "hbat",
+            "hbet",
+            "hbt",
+            "hbit",
+            "habat",
+            "habbat",
+            "hbat lte7t",
+            "lte7t",
+            "t7t",
+            "rjaa",
+            "rja3",
+            "rje3",
+            "rj3",
+            "rjaa3",
+            "rjaa3 lwra",
+            "raje3",
+            "raja3",
+            "rjjaa",
+            "lwra",
+            "lor",
+            // English / French words as heard by the Arabic recognizer
+            "بريفيوس",
+            "بريفيوز",
+            "بريفيس",
+            "داون",
+            "باك",
+            "جو باك",
+            "سكرول داون",
+            "سوايب داون",
+            "بريسيدون",
+            "بريسيدان",
+            "بريسيدو",
+            "ريتور",
+            "ريتورن",
+            "ديسان",
+            "ديسون",
             // French
             "precedent",
             "précédent",
@@ -117,6 +215,11 @@ object CommandEngine {
             "vers le bas",
             "descends",
             "descend",
+            "revenir",
+            "retourne",
+            "plus bas",
+            "bas",
+            "video d avant",
             // English
             "previous",
             "previous video",
@@ -124,7 +227,11 @@ object CommandEngine {
             "go back",
             "scroll down",
             "swipe down",
-            "down"
+            "down",
+            "last video",
+            "previous one",
+            "go down",
+            "rewind"
         ),
 
         CommandType.STOP to listOf(
@@ -147,16 +254,42 @@ object CommandEngine {
             "بركة",
             "توقف عن الاستماع",
             "وقف الاستماع",
+            "ستوب",
+            "ستوب ليسنينج",
+            "وقف ليسنينج",
+            "كفى",
+            "يكفي",
+            "wqf",
+            "wakaf",
+            "wa9ef",
+            "wa9f",
+            "waqef",
+            "wkf",
+            "wa9ef daba",
+            "7bs",
+            "hbes",
+            "hbess",
+            "habs",
+            "hbs",
+            "safi",
+            "saafi",
+            "barka",
             // French
             "stop",
             "arrete",
             "arrête",
             "arreter",
             "arrêter",
+            "arrete d ecouter",
+            "arrête d'écouter",
+            "stoppe",
             // English
             "stop",
             "stop listening",
-            "halt"
+            "halt",
+            "stop it",
+            "quit",
+            "enough"
         ),
 
         CommandType.RESUME to listOf(
@@ -171,59 +304,123 @@ object CommandEngine {
             "عاود خدم",
             "بدا",
             "كملها",
+            "كملو",
+            "عاود",
+            "عاود بدا",
+            "ريزوم",
+            "ريزيوم",
+            "كونتينيو",
+            "ستارت",
+            "kml",
+            "kemmel",
+            "kamel",
+            "kmel",
+            "kemel",
+            "bda",
+            "3awd",
+            "3awd khdem",
+            "tabi3",
+            "tabe3",
             // French
             "continue",
             "continuer",
             "reprendre",
             "recommence",
             "recommencer",
+            "redemarre",
+            "redémarre",
+            "commence",
+            "demarre",
+            "démarre",
             // English
             "resume",
             "continue",
-            "start"
+            "start",
+            "start listening",
+            "keep going",
+            "go on",
+            "begin"
         ),
 
         CommandType.PAUSE to listOf(
             "ايقاف مؤقت",
             "إيقاف مؤقت",
-            "pause"
+            "وقف الفيديو",
+            "حبس الفيديو",
+            "وقف مؤقت",
+            "بوز",
+            "باوز",
+            "بوزا",
+            "pause",
+            "pause video",
+            "pause it",
+            "paws",
+            "pauza",
+            "mets en pause",
+            "mettre en pause",
+            "pause la video",
+            "mise en pause"
         ),
 
         CommandType.PLAY to listOf(
             "شغل",
             "تشغيل",
             "خدم",
+            "شغلو",
+            "شغلها",
+            "خدمها",
+            "شغل الفيديو",
+            "بلاي",
+            "chghal",
+            "chghel",
+            "shghal",
+            "chaghal",
+            "khdem",
             "play",
-            "lance"
+            "play video",
+            "play it",
+            "lance",
+            "lance la video",
+            "joue",
+            "jouer",
+            "lecture"
         )
     )
 
     // Pre-normalized internal lookup cache for ultra-fast matching
     private val normalizedDefaultMap: MutableMap<String, CommandType> = HashMap()
-    private val sortedPhrasesByLength: List<Pair<String, CommandType>>
+    private val sortedMultiWordPhrases: List<Pair<String, CommandType>>
+
+    // Utterances longer than this are probably video audio / conversation, not a command
+    private const val MAX_WORDS_FOR_TOKEN_MATCH = 5
+    private const val MAX_WORDS_FOR_PHRASE_MATCH = 8
 
     init {
-        val pairs = mutableListOf<Pair<String, CommandType>>()
+        val multi = mutableListOf<Pair<String, CommandType>>()
         for ((cmd, aliases) in DEFAULT_ALIASES) {
             for (alias in aliases) {
                 val norm = ArabicNormalizer.normalize(alias)
-                if (norm.isNotEmpty()) {
+                if (norm.isEmpty()) continue
+                // first definition wins when the same word appears under two commands
+                if (!normalizedDefaultMap.containsKey(norm)) {
                     normalizedDefaultMap[norm] = cmd
-                    pairs.add(norm to cmd)
                 }
+                if (norm.contains(' ')) multi.add(norm to cmd)
             }
         }
-        // Sort descending by character length so longer, more specific phrases match first
-        sortedPhrasesByLength = pairs.sortedByDescending { it.first.length }
+        // Longest (most specific) phrases first
+        sortedMultiWordPhrases = multi.sortedByDescending { it.first.length }
     }
 
     /**
-     * Resolves spoken raw speech into a CommandType.
+     * Resolves spoken raw speech into a CommandType, regardless of the language the speech
+     * recognizer used to transcribe it (Arabic script, Latin script, Darija, MSA, French, English).
+     *
      * Order of precedence:
-     * 1. Custom user aliases (exact & contains)
-     * 2. Direct exact normalized match
-     * 3. Single-word token match (e.g. user says "عفاك طلع" or "دوز دابا" or "please next")
-     * 4. Multi-word phrase containment (longer phrases first)
+     * 1. Custom user aliases (exact, or whole-word containment)
+     * 2. Exact normalized match in the built-in dictionary
+     * 3. Multi-word phrase containment, whole words only (longest phrase first)
+     * 4. Single-word token match with Darija/Arabic prefix/suffix stripping
      */
     fun match(
         rawText: String?,
@@ -237,12 +434,13 @@ object CommandEngine {
         if (normalized.isEmpty()) {
             return CommandMatchResult(CommandType.NONE, "", rawText)
         }
+        val padded = " $normalized "
 
-        // 1. Check custom user aliases (normalized)
+        // 1. Custom user aliases
         for ((customWord, cmd) in customAliases) {
             val normCustom = ArabicNormalizer.normalize(customWord)
             if (normCustom.isNotEmpty()) {
-                if (normalized == normCustom || normalized.contains(normCustom)) {
+                if (normalized == normCustom || padded.contains(" $normCustom ")) {
                     return CommandMatchResult(cmd, customWord, rawText)
                 }
             }
@@ -253,51 +451,71 @@ object CommandEngine {
             return CommandMatchResult(cmd, normalized, rawText)
         }
 
-        // 3. Token-based word match (handles speech with background video words or filler words e.g. "كلام دوز", "طلع دابا", "please next")
-        // Check tokens in reverse order so the most recently spoken command word takes precedence over earlier words in the buffer
         val words = normalized.split(" ").filter { it.isNotBlank() }
-        for (word in words.reversed()) {
-            if (word.length >= 2) {
-                // Direct word match
-                normalizedDefaultMap[word]?.let { cmd ->
-                    return CommandMatchResult(cmd, word, rawText)
-                }
 
-                // Moroccan Darija / Arabic verb prefix stripping: "ودوز", "فدوز", "ندوز", "نطلع", "نرجع", "نهبط"
-                if (word.length >= 3 && (word.startsWith("و") || word.startsWith("ف") || word.startsWith("ن") || word.startsWith("ت") || word.startsWith("ي"))) {
-                    val stripped = word.substring(1)
-                    normalizedDefaultMap[stripped]?.let { cmd ->
-                        return CommandMatchResult(cmd, stripped, rawText)
-                    }
-                }
-
-                // Suffix stripping: "دوزها", "طلعها", "رجعها", "هبطها", "دوزلي", "طلعلي"
-                if (word.length >= 4 && (word.endsWith("ها") || word.endsWith("لي") || word.endsWith("لو") || word.endsWith("هم"))) {
-                    val strippedSuffix = word.substring(0, word.length - 2)
-                    normalizedDefaultMap[strippedSuffix]?.let { cmd ->
-                        return CommandMatchResult(cmd, strippedSuffix, rawText)
-                    }
-                }
-
-                // Repeated/elongated character collapse: e.g. "دوووز" -> "دوز", "ططلع" -> "طلع", "صااافي" -> "صافي"
-                val collapsed = word.replace(Regex("(.)\\1+"), "$1")
-                if (collapsed != word && collapsed.length >= 2) {
-                    normalizedDefaultMap[collapsed]?.let { cmd ->
-                        return CommandMatchResult(cmd, collapsed, rawText)
-                    }
+        // 3. Multi-word phrases ("الفيديو التالي", "scroll down", "mets en pause"...), whole words only
+        if (words.size <= MAX_WORDS_FOR_PHRASE_MATCH) {
+            for ((phrase, cmd) in sortedMultiWordPhrases) {
+                if (padded.contains(" $phrase ")) {
+                    return CommandMatchResult(cmd, phrase, rawText)
                 }
             }
         }
 
-        // 4. Substring / phrase matching for natural multi-word phrases (longest phrases first)
-        for ((phrase, cmd) in sortedPhrasesByLength) {
-            if (normalized.contains(phrase)) {
-                return CommandMatchResult(cmd, phrase, rawText)
+        // 4. Token-based match. Latest spoken word wins.
+        if (words.size <= MAX_WORDS_FOR_TOKEN_MATCH) {
+            for (word in words.reversed()) {
+                matchSingleWord(word)?.let { (cmd, alias) ->
+                    return CommandMatchResult(cmd, alias, rawText)
+                }
             }
         }
 
         return CommandMatchResult(CommandType.NONE, "", rawText)
     }
+
+    private fun matchSingleWord(word: String): Pair<CommandType, String>? {
+        if (word.length < 2) return null
+
+        normalizedDefaultMap[word]?.let { return it to word }
+
+        val isArabic = word.any { it in '\u0600'..'\u06FF' }
+
+        if (isArabic) {
+            // Arabic definite article / conjunction: "والتالي", "فدوز"
+            // Verb prefixes (Darija): "ندوز", "نطلع", "نرجع", "يطلع", "تهبط"
+            if (word.length >= 3 && word[0] in "وفنتيب") {
+                val stripped = word.substring(1)
+                normalizedDefaultMap[stripped]?.let { return it to stripped }
+                // double prefix: "وندوز", "وكتدوز" style (و + ن/ت/ي)
+                if (stripped.length >= 3 && stripped[0] in "نتيك") {
+                    val stripped2 = stripped.substring(1)
+                    normalizedDefaultMap[stripped2]?.let { return it to stripped2 }
+                }
+            }
+            // "كت" present-tense marker in Darija: "كتدوز", "كيطلع"
+            if (word.length >= 4 && (word.startsWith("كت") || word.startsWith("كي") || word.startsWith("غا"))) {
+                val stripped = word.substring(2)
+                normalizedDefaultMap[stripped]?.let { return it to stripped }
+            }
+            // Suffixes: "دوزها", "طلعلي", "رجعو", "هبطوا", "طلعني", "دوزلنا"
+            for (suffix in ARABIC_SUFFIXES) {
+                if (word.length >= suffix.length + 2 && word.endsWith(suffix)) {
+                    val stripped = word.substring(0, word.length - suffix.length)
+                    normalizedDefaultMap[stripped]?.let { return it to stripped }
+                }
+            }
+        }
+
+        // Repeated/elongated characters: "دوووز" -> "دوز", "nexxxt" -> "next"
+        val collapsed = word.replace(Regex("(.)\\1+"), "$1")
+        if (collapsed != word && collapsed.length >= 2) {
+            normalizedDefaultMap[collapsed]?.let { return it to collapsed }
+        }
+        return null
+    }
+
+    private val ARABIC_SUFFIXES = listOf("ها", "لي", "لو", "هم", "نا", "ني", "ك", "و", "وا", "ي")
 
     /**
      * Returns all default aliases for documentation and UI display.
