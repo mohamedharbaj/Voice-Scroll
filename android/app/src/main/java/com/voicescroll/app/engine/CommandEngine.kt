@@ -625,7 +625,25 @@ object CommandEngine {
             }
         }
 
+        // 5. Long transcript (the video is talking too): the command is the most recent speech,
+        //    so look only at the END of the transcript, exact dictionary words/phrases only.
+        if (words.size > MAX_WORDS_FOR_TOKEN_MATCH) {
+            matchTail(words)?.let { (cmd, alias) ->
+                return CommandMatchResult(cmd, alias, rawText)
+            }
+        }
+
         return CommandMatchResult(CommandType.NONE, "", rawText)
+    }
+
+    /** Exact dictionary match on the last 3, 2, then 1 words of a long transcript. */
+    private fun matchTail(words: List<String>): Pair<CommandType, String>? {
+        for (n in 3 downTo 1) {
+            if (words.size < n) continue
+            val tail = words.subList(words.size - n, words.size).joinToString(" ")
+            normalizedDefaultMap[tail]?.let { return it to tail }
+        }
+        return null
     }
 
     private data class NormAlias(val norm: String, val original: String, val cmd: CommandType)
@@ -696,6 +714,20 @@ object CommandEngine {
      * Returns all default aliases for documentation and UI display.
      */
     fun getDefaultAliases(): Map<CommandType, List<String>> = DEFAULT_ALIASES
+
+    /**
+     * كلمات/عبارات قصيرة كنعطيوها للـ recognizer كـ biasing (EXTRA_BIASING_STRINGS) باش يفضلها فالنتيجة
+     * حتى مع ضجيج الفيديو. كنحيدو عبارات STOP الطويلة وكنحدّو العدد.
+     */
+    fun biasingPhrases(custom: Collection<String> = emptyList(), limit: Int = 220): ArrayList<String> {
+        val out = LinkedHashSet<String>()
+        out.addAll(custom)
+        for ((cmd, aliases) in DEFAULT_ALIASES) {
+            if (cmd == CommandType.STOP) continue
+            for (a in aliases) if (a.split(' ').size <= 2) out.add(a)
+        }
+        return ArrayList(out.take(limit))
+    }
 }
 
 data class CommandMatchResult(
