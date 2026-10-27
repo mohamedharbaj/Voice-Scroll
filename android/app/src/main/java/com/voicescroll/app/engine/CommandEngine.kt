@@ -13,6 +13,51 @@ object CommandEngine {
     private val DEFAULT_ALIASES: Map<CommandType, List<String>> = mapOf(
         CommandType.NEXT to listOf(
             // Arabic Standard & Darija - Next / Swipe Up
+            "التاليه",
+            "التالية",
+            "الموالي",
+            "الفيديو الموالي",
+            "اللاحق",
+            "الفيديو اللاحق",
+            "انتقل",
+            "انتقل للتالي",
+            "انتقل الي الفيديو التالي",
+            "الي الاعلي",
+            "للاعلي",
+            "الاعلي",
+            "تمرير للاعلي",
+            "مرر الي الاعلي",
+            "شاشه تاليه",
+            "التالي رجاء",
+            "من فضلك التالي",
+            "لو سمحت التالي",
+            "الجاي",
+            "اللي بعد",
+            "لي بعد",
+            "دوزلو",
+            "دوزني",
+            "دوزه",
+            "دوزلنا",
+            "دوس",
+            "دوز ليا",
+            "طلعو",
+            "طلعه",
+            "طلع ليا",
+            "طالعه",
+            "ظلع",
+            "دوز دابا",
+            "طلع دابا",
+            "داوز",
+            "دوزز دابا",
+            "دوض",
+            "دوس الفيديو",
+            "دوز الفيديو",
+            "فيديو اخر",
+            "فيديو آخر",
+            "فيديو تاني",
+            "فيديو اخر",
+            "الفيديو الاخر",
+            "الموالي رجاء",
             "طلع",
             "دوز",
             "التالي",
@@ -127,6 +172,45 @@ object CommandEngine {
 
         CommandType.PREVIOUS to listOf(
             // Arabic Standard & Darija - Previous / Swipe Down
+            "السابقه",
+            "السابقة",
+            "الماضي",
+            "الفيديو الماضي",
+            "الفيديو القديم",
+            "عد",
+            "عوده",
+            "عودة",
+            "عد للخلف",
+            "ارجع للخلف",
+            "الي الخلف",
+            "للخلف",
+            "الي الاسفل",
+            "للاسفل",
+            "الاسفل",
+            "تمرير للاسفل",
+            "مرر الي الاسفل",
+            "السابق رجاء",
+            "من فضلك السابق",
+            "لو سمحت السابق",
+            "اللي فات",
+            "لي فات",
+            "اللي قبل",
+            "هبطو",
+            "هبطه",
+            "هبط ليا",
+            "رجع ليا",
+            "رجعه",
+            "رجعلو",
+            "رجع دابا",
+            "نزل",
+            "نزّل",
+            "انزل",
+            "نزلو",
+            "نزلها",
+            "نزل لتحت",
+            "الفيديو لي فاتت",
+            "الفيديو القديم",
+            "الفيديو الاول",
             "هبط",
             "رجع",
             "ارجع",
@@ -253,6 +337,12 @@ object CommandEngine {
 
         CommandType.RESUME to listOf(
             // Arabic Standard & Darija - Resume
+            "واصل الاستماع",
+            "استئناف الاستماع",
+            "كمل الاستماع",
+            "تابع الاستماع",
+            "ابدا الاستماع",
+            "ابدأ الاستماع",
             "كمل",
             "كمّل",
             "تابع",
@@ -304,6 +394,31 @@ object CommandEngine {
         // PAUSE = إيقاف الفيديو (وقف / حبس / قف / توقف / stop / pause / arrête ...)
         CommandType.PAUSE to listOf(
             // Arabic Standard & Darija
+            "ايقاف",
+            "إيقاف",
+            "ايقاف الفيديو",
+            "إيقاف الفيديو",
+            "ايقاف التشغيل",
+            "اوقف التشغيل",
+            "توقف عن التشغيل",
+            "اوقفه",
+            "اوقفها",
+            "اوقفو",
+            "قف رجاء",
+            "من فضلك قف",
+            "لو سمحت قف",
+            "اوقف رجاء",
+            "وقفه",
+            "وقف الفيديو دابا",
+            "حبسه",
+            "حبس رجاء",
+            "حبس الفيديو دابا",
+            "وقف شوية",
+            "حبس شوية",
+            "سكت",
+            "سكّت",
+            "سكتو",
+            "سكت الفيديو",
             "وقف",
             "قف",
             "قفي",
@@ -384,6 +499,25 @@ object CommandEngine {
 
         // PLAY / RESUME = تشغيل الفيديو (كمل، تابع، شغل، play، resume ...)
         CommandType.PLAY to listOf(
+            "شغله",
+            "شغلو الفيديو",
+            "شغل الفيديو دابا",
+            "شغل دابا",
+            "شغلي",
+            "شغلني",
+            "تشغيل الفيديو",
+            "استئناف التشغيل",
+            "واصل التشغيل",
+            "واصل",
+            "واصل الفيديو",
+            "كمل الفيديو",
+            "تابع الفيديو",
+            "كمل التشغيل",
+            "عاود شغل",
+            "عاود الفيديو",
+            "بلاي الفيديو",
+            "خدم الفيديو",
+            "خدمو",
             "شغل",
             "تشغيل",
             "خدم",
@@ -457,10 +591,9 @@ object CommandEngine {
         }
         val padded = " $normalized "
 
-        // 1. Custom user aliases
-        for ((customWord, cmd) in customAliases) {
-            val normCustom = ArabicNormalizer.normalize(customWord)
-            if (normCustom.isNotEmpty()) {
+        // 1. Custom user aliases (normalized once per alias map, not on every call)
+        if (customAliases.isNotEmpty()) {
+            for ((normCustom, customWord, cmd) in normalizedCustom(customAliases)) {
                 if (normalized == normCustom || padded.contains(" $normCustom ")) {
                     return CommandMatchResult(cmd, customWord, rawText)
                 }
@@ -495,6 +628,22 @@ object CommandEngine {
         return CommandMatchResult(CommandType.NONE, "", rawText)
     }
 
+    private data class NormAlias(val norm: String, val original: String, val cmd: CommandType)
+
+    @Volatile private var customCacheKey: Map<String, CommandType>? = null
+    @Volatile private var customCacheValue: List<NormAlias> = emptyList()
+
+    private fun normalizedCustom(map: Map<String, CommandType>): List<NormAlias> {
+        if (map === customCacheKey) return customCacheValue
+        val list = map.mapNotNull { (word, cmd) ->
+            val n = ArabicNormalizer.normalize(word)
+            if (n.isEmpty()) null else NormAlias(n, word, cmd)
+        }
+        customCacheValue = list
+        customCacheKey = map
+        return list
+    }
+
     private fun matchSingleWord(word: String): Pair<CommandType, String>? {
         if (word.length < 2) return null
 
@@ -513,6 +662,11 @@ object CommandEngine {
                     val stripped2 = stripped.substring(1)
                     normalizedDefaultMap[stripped2]?.let { return it to stripped2 }
                 }
+            }
+            // Definite article: "الطلع", "الهبوط" ... try without "ال"
+            if (word.length >= 4 && word.startsWith("ال")) {
+                val stripped = word.substring(2)
+                normalizedDefaultMap[stripped]?.let { return it to stripped }
             }
             // "كت" present-tense marker in Darija: "كتدوز", "كيطلع"
             if (word.length >= 4 && (word.startsWith("كت") || word.startsWith("كي") || word.startsWith("غا"))) {
