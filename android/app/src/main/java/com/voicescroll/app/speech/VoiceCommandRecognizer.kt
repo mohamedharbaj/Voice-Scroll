@@ -7,6 +7,8 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.ParcelFileDescriptor
+import android.media.AudioFormat
 import android.speech.RecognitionListener
 import android.speech.RecognitionSupport
 import android.speech.RecognitionSupportCallback
@@ -44,7 +46,7 @@ class VoiceCommandRecognizer(
         private const val DUPLICATE_WINDOW_MS = 350L
 
         // إلا كان كلام/صوت الفيديو شغال ولا لقينا أمر فهاد المدة -> نبدلو اللغة (باش كل اللغات يجيها الدور)
-        private const val SPEECH_LANGUAGE_SLICE_MS = 2500L
+        private const val SPEECH_LANGUAGE_SLICE_MS = 6000L
 
         // اللغات اللي كندورو عليها فالوضع "كل اللغات": دارجة (ar-SA كتعوضها إلا ar-MA ما خدماتش)، English، Français
         private val ALL_LANGUAGES = listOf("ar-MA", "ar-SA", "en-US", "fr-FR")
@@ -52,9 +54,13 @@ class VoiceCommandRecognizer(
         // جدول التناوب فالوضع التلقائي: العربية (دارجة ar-MA + فصحى ar-SA) = 6 من 8 جلسات.
         // قبل كان التناوب 1/3 لكل لغة، يعني العربية كتتسمع غير ثلث الوقت وكتضيع الأوامر وكيبان التطبيق بطيء.
         private val AUTO_SCHEDULE = listOf(
-            "ar-MA", "ar-SA", "ar-MA", "en-US",
-            "ar-MA", "ar-SA", "ar-MA", "fr-FR"
+            "ar-MA", "ar-MA", "ar-MA", "ar-MA", "en-US",
+            "ar-MA", "ar-MA", "ar-MA", "ar-MA", "fr-FR"
         )
+
+        // إلغاء الصدى: إلا فشل مرتين متتاليتين فهاد الهاتف كنرجعو للميكروفون العادي (حتى يتعاود تشغيل التطبيق)
+        @Volatile
+        private var aecDisabledForProcess = false
 
         private val BIASING_WORDS = arrayListOf(
             // دارجة / فصحى
@@ -119,6 +125,13 @@ class VoiceCommandRecognizer(
     private var speechBegun = false
     private val idleLanguageRunnable = Runnable { onIdleSliceElapsed() }
 
+    // التقاط الصوت مع إلغاء الصدى (يحيّد صوت الفيديو من الميكروفون) — أندرويد 13+
+    private var feeder: AecAudioFeeder? = null
+    private var sessionPfd: ParcelFileDescriptor? = null
+    private var sessionUsesAec = false
+    private var rmsSeen = false
+    private var aecFailStreak = 0
+
     init {
         if (Looper.myLooper() == Looper.getMainLooper()) {
             ensureRecognizerInstance()
@@ -169,6 +182,9 @@ class VoiceCommandRecognizer(
             } finally {
                 speechRecognizer = null
                 isRecognizing = false
+                endAudioSession()
+                try { feeder?.stop() } catch (_: Exception) {}
+                feeder = null
                 unmuteBeepStreams()
                 listener.onListeningStateChanged(false, "التحكم الصوتي متوقف")
             }
@@ -259,6 +275,7 @@ class VoiceCommandRecognizer(
     private fun recreateAndRestart(delayMs: Long) {
         if (!isIntentionallyListening) return
         mainHandler.removeCallbacksAndMessages(null)
+        endAudioSession()
         try {
             speechRecognizer?.destroy()
         } catch (_: Exception) {
@@ -293,9 +310,61 @@ class VoiceCommandRecognizer(
         commandFiredThisSession = false
         speechBegun = false
         currentLanguage = pickLanguage()
+        // ما كنمحيوش الـ buffer هنا: فيه الكلام اللي تقال بين جلستين (باش ما يضيعش)
+        try { sessionPfd?.close() } catch (_: Exception) {}
+        sessionPfd = null
+        rmsSeen = false
+        sessionPfd = openAecSession()
+        sessionUsesAec = sessionPfd != null
         isRecognizing = true
-        speechRecognizer?.startListening(createRecognizerIntent(currentLanguage))
+        speechRecognizer?.startListening(createRecognizerIntent(currentLanguage, sessionPfd))
         armIdleWatchdog()
+    }
+
+    private fun openAecSession(): ParcelFileDescriptor? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU || aecDisabledForProcess) return null
+        var f = feeder
+        if (f == null) {
+            f = AecAudioFeeder()
+            if (!f.start()) {
+                Log.i(TAG, "AEC unavailable -> normal microphone")
+                aecDisabledForProcess = true
+                return null
+            }
+            feeder = f
+        }
+        return f.openSession()
+    }
+
+    /** نسد الجلسة الصوتية الحالية (pipe + buffer). */
+    private fun endAudioSession() {
+        try { sessionPfd?.close() } catch (_: Exception) {}
+        sessionPfd = null
+        feeder?.closeSession()
+    }
+
+    private fun disableAec(reason: String) {
+        Log.w(TAG, "Disabling AEC audio source: $reason")
+        aecDisabledForProcess = true
+        endAudioSession()
+        try { feeder?.stop() } catch (_: Exception) {}
+        feeder = null
+        sessionUsesAec = false
+        aecFailStreak = 0
+    }
+
+    /** إلا الـ recognizer ما قراش الصوت المبعوث (ما كاين حتى rms) مرتين -> نرجعو للميكروفون العادي. */
+    private fun trackAecHealth(error: Int?) {
+        if (!sessionUsesAec) return
+        val hardError = error != null &&
+            error != SpeechRecognizer.ERROR_NO_MATCH &&
+            error != SpeechRecognizer.ERROR_SPEECH_TIMEOUT
+        if (!rmsSeen || hardError) {
+            aecFailStreak++
+            if (aecFailStreak >= 2) disableAec("no audio flow / errors (error=$error)")
+        } else {
+            aecFailStreak = 0
+        }
     }
 
     /** جدول اللغات حسب اختيار المستخدم، بعد حذف/تعويض اللغات غير المدعومة (ar-MA -> ar-SA). */
@@ -342,6 +411,7 @@ class VoiceCommandRecognizer(
         } catch (_: Exception) {
         }
         isRecognizing = false
+        endAudioSession()
         advanceLanguage()
         scheduleRestart(40L)
     }
@@ -378,7 +448,15 @@ class VoiceCommandRecognizer(
         }
     }
 
-    private fun createRecognizerIntent(lang: String?): Intent {
+    // قائمة biasing كاملة (كل الأوامر + الأسماء المستعارة ديال المستخدم)، كتتحسب مرة وحدة
+    private val biasingList: ArrayList<String> by lazy {
+        val custom = try { prefsManager.getCustomAliasMap().keys } catch (_: Exception) { emptyList<String>() }
+        val list = CommandEngine.biasingPhrases(custom)
+        for (w in BIASING_WORDS) if (w !in list) list.add(w)
+        list
+    }
+
+    private fun createRecognizerIntent(lang: String?, audioPfd: ParcelFileDescriptor? = null): Intent {
         return Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
@@ -399,6 +477,14 @@ class VoiceCommandRecognizer(
             putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 1500L)
             putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 1200L)
 
+            // صوت مصفّى (AEC) من AecAudioFeeder بدل الميكروفون المباشر
+            if (audioPfd != null) {
+                putExtra("android.speech.extra.AUDIO_SOURCE", audioPfd)
+                putExtra("android.speech.extra.AUDIO_SOURCE_CHANNEL_COUNT", 1)
+                putExtra("android.speech.extra.AUDIO_SOURCE_ENCODING", AudioFormat.ENCODING_PCM_16BIT)
+                putExtra("android.speech.extra.AUDIO_SOURCE_SAMPLING_RATE", AecAudioFeeder.SAMPLE_RATE)
+            }
+
             // لغات إضافية (كتعتمدها بعض خدمات Google؛ وإلا ما عرفاتهاش كتتجاهلها)
             putStringArrayListExtra(
                 "android.speech.extra.ADDITIONAL_LANGUAGES",
@@ -407,7 +493,17 @@ class VoiceCommandRecognizer(
 
             // Biasing: EXTRA_BIASING_STRINGS كاين من أندرويد 13 (API 33)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                putStringArrayListExtra(RecognizerIntent.EXTRA_BIASING_STRINGS, BIASING_WORDS)
+                putStringArrayListExtra(RecognizerIntent.EXTRA_BIASING_STRINGS, biasingList)
+
+                // كشف اللغة/التبديل أوتوماتيكيا داخل نفس الجلسة (عربية/إنجليزية/فرنسية) — كتخدم فالمحرك on-device
+                // وإلا ما كانش مدعوم كيتجاهلها النظام بلا مشكل.
+                if (prefsManager.commandLanguage == PreferencesManager.LANG_AUTO) {
+                    val allowed = arrayListOf("ar-MA", "en-US", "fr-FR")
+                    putExtra("android.speech.extra.ENABLE_LANGUAGE_DETECTION", true)
+                    putStringArrayListExtra("android.speech.extra.LANGUAGE_DETECTION_ALLOWED_LANGUAGES", allowed)
+                    putExtra("android.speech.extra.ENABLE_LANGUAGE_SWITCH", "quick_response")
+                    putStringArrayListExtra("android.speech.extra.LANGUAGE_SWITCH_ALLOWED_LANGUAGES", allowed)
+                }
             }
 
             if (lang != null) {
@@ -447,6 +543,7 @@ class VoiceCommandRecognizer(
     }
 
     override fun onRmsChanged(rmsdB: Float) {
+        rmsSeen = true
         listener.onRmsChanged(rmsdB)
     }
 
@@ -461,6 +558,8 @@ class VoiceCommandRecognizer(
         Log.d(TAG, "SpeechRecognizer onError: code=$error")
 
         if (!isIntentionallyListening) return
+        trackAecHealth(error)
+        endAudioSession()
 
         // نتيجة الأمر تنفذات من قبل (partial) -> الخطأ ديال الجلسة القديمة ما يهمناش
         if (commandFiredThisSession) {
@@ -540,6 +639,8 @@ class VoiceCommandRecognizer(
     override fun onResults(results: Bundle?) {
         isRecognizing = false
         errorStreak = 0
+        trackAecHealth(null)
+        endAudioSession()
         if (!commandFiredThisSession) {
             val fired = processSpeechResults(results, isPartial = false)
             // ما تفهمش الأمر بهاد اللغة -> الجلسة الجاية بلغة أخرى
@@ -561,6 +662,7 @@ class VoiceCommandRecognizer(
             } catch (_: Exception) {
             }
             isRecognizing = false
+            endAudioSession()
             scheduleRestart(RESTART_AFTER_COMMAND_MS)
         }
     }
