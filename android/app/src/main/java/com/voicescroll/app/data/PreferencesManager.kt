@@ -99,8 +99,19 @@ class PreferencesManager(context: Context) {
      * Returns custom aliases as a fast lookup map of phrase to CommandType.
      */
     fun getCustomAliasMap(): Map<String, CommandType> {
-        return getCustomAliases().associate { it.phrase to it.command }
+        // الأداء: كان كيتعاود parse للـ JSON فكل نتيجة جزئية (عدة مرات فالثانية). دابا كنخزنو النتيجة
+        // ونعاودو الحساب غير إلا تبدل النص المخزن. نفس الـ instance كيرجع باش CommandEngine يعاود يستعمل الكاش ديالو.
+        val raw = prefs.getString(KEY_CUSTOM_ALIASES_JSON, null)
+        val cached = cachedAliasMap
+        if (cached != null && raw == cachedAliasRaw) return cached
+        val map = getCustomAliases().associate { it.phrase to it.command }
+        cachedAliasRaw = raw
+        cachedAliasMap = map
+        return map
     }
+
+    @Volatile private var cachedAliasRaw: String? = null
+    @Volatile private var cachedAliasMap: Map<String, CommandType>? = null
 
     private fun saveCustomAliases(list: List<CustomAlias>) {
         val jsonArray = JSONArray()
