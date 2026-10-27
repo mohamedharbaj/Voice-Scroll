@@ -35,6 +35,20 @@ object ArabicNormalizer {
             .replace('آ', 'ا')
             .replace('ٱ', 'ا')
 
+        // Hamza carriers: ؤ -> و, ئ -> ي, ء removed (different recognizers spell the same word differently)
+        text = text.replace('ؤ', 'و')
+            .replace('ئ', 'ي')
+            .replace("ء", "")
+
+        // Arabic-Indic / Persian digits -> ASCII
+        text = text.map { c ->
+            when (c) {
+                in '\u0660'..'\u0669' -> '0' + (c - '\u0660')
+                in '\u06F0'..'\u06F9' -> '0' + (c - '\u06F0')
+                else -> c
+            }
+        }.joinToString("")
+
         // Normalize Taa Marbuta
         text = text.replace('ة', 'ه')
 
