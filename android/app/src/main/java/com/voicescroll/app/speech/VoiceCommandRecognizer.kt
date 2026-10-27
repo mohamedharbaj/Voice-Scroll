@@ -37,8 +37,8 @@ class VoiceCommandRecognizer(
 
     companion object {
         private const val TAG = "VoiceRecognizer"
-        private const val RESTART_NORMAL_DELAY_MS = 60L
-        private const val RESTART_AFTER_COMMAND_MS = 120L
+        private const val RESTART_NORMAL_DELAY_MS = 30L
+        private const val RESTART_AFTER_COMMAND_MS = 60L
         private const val RESTART_BUSY_DELAY_MS = 350L
         private const val MAX_BACKOFF_MS = 3000L
         private const val DUPLICATE_WINDOW_MS = 350L
@@ -47,12 +47,22 @@ class VoiceCommandRecognizer(
         private const val SPEECH_LANGUAGE_SLICE_MS = 2500L
 
         // اللغات اللي كندورو عليها فالوضع "كل اللغات": دارجة (ar-SA كتعوضها إلا ar-MA ما خدماتش)، English، Français
-        private val ALL_LANGUAGES = listOf("ar-MA", "en-US", "fr-FR")
+        private val ALL_LANGUAGES = listOf("ar-MA", "ar-SA", "en-US", "fr-FR")
+
+        // جدول التناوب فالوضع التلقائي: العربية (دارجة ar-MA + فصحى ar-SA) = 6 من 8 جلسات.
+        // قبل كان التناوب 1/3 لكل لغة، يعني العربية كتتسمع غير ثلث الوقت وكتضيع الأوامر وكيبان التطبيق بطيء.
+        private val AUTO_SCHEDULE = listOf(
+            "ar-MA", "ar-SA", "ar-MA", "en-US",
+            "ar-MA", "ar-SA", "ar-MA", "fr-FR"
+        )
 
         private val BIASING_WORDS = arrayListOf(
             // دارجة / فصحى
             "دوز", "طلع", "هبط", "رجع", "وقف", "حبس", "صافي", "كمل", "تابع", "شغل",
             "التالي", "السابق", "دوزها", "طلعها", "هبطها", "رجعها", "ايقاف مؤقت",
+            // فصحى
+            "الفيديو التالي", "الفيديو السابق", "للأعلى", "للأسفل", "انتقل", "عد", "واصل", "استئناف",
+            "أوقف", "تشغيل", "إيقاف", "مرر للأعلى", "مرر للأسفل",
             // English
             "next", "up", "previous", "down", "back", "stop", "resume", "pause", "play",
             "scroll up", "scroll down", "next video", "previous video", "stop video", "pause video",
@@ -213,7 +223,7 @@ class VoiceCommandRecognizer(
                 probe,
                 context.mainExecutor,
                 object : RecognitionSupportCallback {
-                    override fun onSupportAvailable(recognitionSupport: RecognitionSupport) {
+                    override fun onSupportResult(recognitionSupport: RecognitionSupport) {
                         val installed = recognitionSupport.installedOnDeviceLanguages
                         val supported = recognitionSupport.supportedOnDeviceLanguages
                         offlineInstalled.clear()
@@ -288,28 +298,28 @@ class VoiceCommandRecognizer(
         armIdleWatchdog()
     }
 
-    /** اللغات النشطة حسب اختيار المستخدم، بعد حذف/تعويض اللغات غير المدعومة. */
-    private fun activeLanguages(): List<String> {
+    /** جدول اللغات حسب اختيار المستخدم، بعد حذف/تعويض اللغات غير المدعومة (ar-MA -> ar-SA). */
+    private fun languageSchedule(): List<String> {
         if (useSystemDefaultLanguage) return emptyList()
         val chosen = prefsManager.commandLanguage
-        val base = when (chosen) {
-            PreferencesManager.LANG_AUTO -> ALL_LANGUAGES
-            else -> listOf(chosen)
-        }
-        val result = LinkedHashSet<String>()
+        val base = if (chosen == PreferencesManager.LANG_AUTO) AUTO_SCHEDULE else listOf(chosen)
+        val result = ArrayList<String>(base.size)
         for (lang in base) {
             when {
                 lang !in unsupportedLanguages -> result.add(lang)
                 lang == "ar-MA" && "ar-SA" !in unsupportedLanguages -> result.add("ar-SA")
             }
         }
-        return result.toList()
+        return result
     }
 
+    /** عدد اللغات المختلفة النشطة (باش نعرفو واش خاص التناوب). */
+    private fun activeLanguages(): List<String> = languageSchedule().distinct()
+
     private fun pickLanguage(): String? {
-        val langs = activeLanguages()
-        if (langs.isEmpty()) return null
-        return langs[languageIndex % langs.size]
+        val schedule = languageSchedule()
+        if (schedule.isEmpty()) return null
+        return schedule[languageIndex % schedule.size]
     }
 
     private fun advanceLanguage() {
@@ -577,7 +587,7 @@ class VoiceCommandRecognizer(
 
                 // اللغة اللي خدمات دابا كتبقى هي الأولى فالجلسة الجاية (المستخدم غالبا كيعاود بنفس اللغة)
                 currentLanguage?.let { lang ->
-                    val idx = activeLanguages().indexOf(lang)
+                    val idx = languageSchedule().indexOf(lang)
                     if (idx >= 0) languageIndex = idx
                 }
 
